@@ -1,271 +1,455 @@
+// src/Bulk.tsx
+// Teacher – Bulk Certificates
+// Uses a single blockchain transaction via Certificate.addCertificates(...)
+
 import React, { useState } from "react";
 import { ethers } from "ethers";
+import { uploadToIpfsFilebase, filebaseGatewayUrl } from "./ipfsClient";
 import { resolveCertificate } from "./ethers-client";
-import { pushIssued } from "./libs/store";
+import { cidExists, pushIssued } from "./libs/store";
 
-type Row = {
+type BulkRow = {
+  id: number;
   name: string;
   course: string;
   className: string;
+  wallet: string;
   cid: string;
+  uploading: boolean;
+  uploadStatus: string;
+  error: string;
 };
 
-const makeEmptyRow = (): Row => ({
+const makeEmptyRow = (id: number): BulkRow => ({
+  id,
   name: "",
   course: "",
   className: "",
+  wallet: "",
   cid: "",
+  uploading: false,
+  uploadStatus: "",
+  error: "",
 });
 
-export default function Bulk() {
-  const [count, setCount] = useState(1);
-  const [rows, setRows] = useState<Row[]>([makeEmptyRow()]);
+const Bulk: React.FC = () => {
+  const [rows, setRows] = useState<BulkRow[]>([makeEmptyRow(1)]);
+  const [nextId, setNextId] = useState(2);
+  const [rowsCountInput, setRowsCountInput] = useState("1");
   const [status, setStatus] = useState("");
-  const [statusType, setStatusType] = useState<"none" | "info" | "success" | "error">("none");
-  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // When teacher changes "number of certificates"
-  const handleCountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const value = parseInt(e.target.value || "", 10);
-    const safe = Math.min(Math.max(value, 0), 5000); // between 1 and 50
+  function updateRow(id: number, patch: Partial<BulkRow>) {
+    setRows((prev) =>
+      prev.map((r) => (r.id === id ? { ...r, ...patch } : r))
+    );
+  }
 
-    setCount(safe);
+  function addRow() {
+    setRows((prev) => [...prev, makeEmptyRow(nextId)]);
+    setNextId((id) => id + 1);
+  }
 
+  function removeRow(id: number) {
     setRows((prev) => {
-      const copy = [...prev];
-      if (safe > copy.length) {
-        // add rows
-        for (let i = copy.length; i < safe; i++) {
-          copy.push(makeEmptyRow());
-        }
-      } else if (safe < copy.length) {
-        // remove extra
-        copy.length = safe;
-      }
-      return copy;
+      if (prev.length === 1) return prev;
+      return prev.filter((r) => r.id !== id);
     });
-  };
+  }
 
-  const handleRowChange = (
-    index: number,
-    field: keyof Row,
-    value: string
-  ) => {
-    setRows((prev) => {
-      const next = [...prev];
-      next[index] = { ...next[index], [field]: value };
-      return next;
-    });
-  };
-
-  const handleIssue = async () => {
+  // Generate N rows; increasing keeps data, decreasing trims
+  function handleGenerateRows() {
     setStatus("");
-    setStatusType("none");
+    const num = parseInt(rowsCountInput, 10);
 
-    // Validate rows
-    for (let i = 0; i < rows.length; i++) {
-      const r = rows[i];
-      if (!r.name || !r.course || !r.cid) {
-        setStatus(
-          `Row ${i + 1} is missing required fields. Please fill Student, Course and CID.`
-        );
-        setStatusType("error");
-        return;
-      }
+    if (isNaN(num) || num <= 0) {
+      setStatus("❗ Please enter a valid number of certificates (1 or more).");
+      return;
+    }
+    if (num > 500) {
+      setStatus(
+        "❗ For safety, maximum 500 rows at once. Please enter 500 or less."
+      );
+      return;
     }
 
-    const names: string[] = [];
-    const courses: string[] = [];
-    const classes: string[] = [];
-    const cids: string[] = [];
-    const wallets: string[] = []; // all ZeroAddress (no wallet binding)
+    if (num <= rows.length) {
+      const trimmed = rows.slice(0, num);
+      setRows(trimmed);
+      return;
+    }
 
-    for (const r of rows) {
-      names.push(r.name);
-      courses.push(r.course);
-      classes.push(r.className || "");
-      cids.push(r.cid);
-      wallets.push(ethers.ZeroAddress);
+    const newRows: BulkRow[] = [...rows];
+    let currentNextId = nextId;
+    for (let i = rows.length; i < num; i++) {
+      newRows.push(makeEmptyRow(currentNextId));
+      currentNextId++;
+    }
+    setRows(newRows);
+    setNextId(currentNextId);
+  }
+
+  // Upload one file to Lighthouse and set CID in that row
+  async function handleFileChange(id: number, file: File | null) {
+    if (!file) return;
+
+    updateRow(id, {
+      uploading: true,
+      uploadStatus: "Uploading to IPFS via Lighthouse...",
+      error: "",
+    });
+
+    try {
+      const cid = await uploadToIpfsFilebase(file);
+
+      const existsInDb = cidExists(cid);
+      const existsInRows = rows.some(
+        (r) => r.id !== id && r.cid === cid
+      );
+
+      if (existsInDb || existsInRows) {
+        updateRow(id, {
+          uploading: false,
+          uploadStatus: "",
+          cid: "",
+          error:
+            "❗ This image/CID already exists in database or in another row. Duplicate certificate is not allowed.",
+        });
+        return;
+      }
+
+      updateRow(id, {
+        cid,
+        uploading: false,
+        uploadStatus: `Uploaded ✅ CID: ${cid}`,
+        error: "",
+      });
+    } catch (err: any) {
+      console.error("Bulk row upload error:", err);
+      updateRow(id, {
+        uploading: false,
+        uploadStatus: "",
+        error:
+          err?.message || "Failed to upload file to IPFS. Please try again.",
+      });
+    }
+  }
+
+  // Issue ALL valid rows in ONE transaction using addCertificates(...)
+  async function handleIssueAll() {
+    setStatus("");
+
+    // Rows with required fields
+    const filledRows = rows.filter(
+      (r) => r.name.trim() && r.course.trim() && r.cid.trim()
+    );
+
+    if (filledRows.length === 0) {
+      setStatus(
+        "Please fill at least one row and upload the certificate image (CID)."
+      );
+      return;
+    }
+
+    // Build arrays for smart contract + track which rows are included
+    const studentNames: string[] = [];
+    const courses: string[] = [];
+    const classNames: string[] = [];
+    const cids: string[] = [];
+    const issuedTos: string[] = [];
+    const rowsForTx: BulkRow[] = [];
+
+    for (const row of filledRows) {
+      const trimmedCid = row.cid.trim();
+
+      // prevent duplicates in local DB
+      if (cidExists(trimmedCid)) {
+        updateRow(row.id, {
+          error:
+            "❗ This CID is already recorded in local database. Skipping this row.",
+        });
+        continue;
+      }
+
+      let issuedTo = ethers.ZeroAddress;
+      const trimmedWallet = row.wallet.trim();
+
+      if (trimmedWallet) {
+        if (!ethers.isAddress(trimmedWallet)) {
+          updateRow(row.id, {
+            error: "❗ Invalid wallet address. Skipping this row.",
+          });
+          continue;
+        }
+        issuedTo = trimmedWallet;
+      }
+
+      rowsForTx.push(row);
+      studentNames.push(row.name.trim());
+      courses.push(row.course.trim());
+      classNames.push(row.className.trim() || "");
+      cids.push(trimmedCid);
+      issuedTos.push(issuedTo);
+    }
+
+    if (rowsForTx.length === 0) {
+      setStatus(
+        "No valid rows to issue (all had invalid wallets or duplicate CIDs)."
+      );
+      return;
     }
 
     try {
-      setIsSubmitting(true);
-      setStatusType("info");
-      setStatus(`Connecting to MetaMask and issuing ${cids.length} certificates...`);
-
+      setStatus("⏳ Connecting to MetaMask & resolving contract...");
       const cert = await resolveCertificate();
 
-      const tx = await cert.addCertificates(names, courses, classes, cids, wallets);
+      // ONE transaction: addCertificates(...)
+      setStatus(
+        `⏳ Sending 1 transaction for ${rowsForTx.length} certificates...`
+      );
 
-      setStatusType("info");
-      setStatus("Waiting for blockchain confirmation...");
+      const tx = await cert.addCertificates(
+        studentNames,
+        courses,
+        classNames,
+        cids,
+        issuedTos
+      );
 
+      setStatus("⏳ Waiting for confirmations...");
       const receipt = await tx.wait();
+      const issuedAt = Math.floor(Date.now() / 1000);
 
-      const nowSec = Math.floor(Date.now() / 1000);
-
-      // Save each issued cert into Admin – Issued (local)
-      for (let i = 0; i < cids.length; i++) {
+      // After confirmation: update each row + push to local store
+      for (const row of rowsForTx) {
+        const trimmedCid = row.cid.trim();
         pushIssued({
-          cid: cids[i],
-          name: names[i],
-          course: courses[i],
-          className: classes[i] || "",
-          imageCid: cids[i],
+          cid: trimmedCid,
+          name: row.name.trim(),
+          course: row.course.trim(),
+          className: row.className.trim() || "",
+          imageCid: trimmedCid,
           txHash: receipt.hash,
-          issuedAt: nowSec,
+          issuedAt,
           revoked: false,
+        });
+
+        updateRow(row.id, {
+          uploadStatus: `✅ Issued in bulk tx: ${receipt.hash.slice(0, 10)}...`,
+          error: "",
         });
       }
 
-      setStatusType("success");
       setStatus(
-        `Successfully issued ${cids.length} certificates. Tx: ${receipt.hash}`
+        `✅ Issued ${rowsForTx.length} certificates in ONE transaction. Check the 'Admin – Issued' tab.`
       );
-
-      // Reset rows but keep the same count
-      setRows(Array.from({ length: count }, () => makeEmptyRow()));
-    } catch (err) {
-      console.error(err);
-      setStatusType("error");
-      setStatus("Error issuing bulk certificates. Please check console / MetaMask.");
-    } finally {
-      setIsSubmitting(false);
+    } catch (err: any) {
+      console.error("Bulk issue error:", err);
+      setStatus(
+        err?.message ||
+          "Failed to issue bulk certificates. Please check wallet, network, and contract addCertificates(...) function."
+      );
     }
-  };
-
-  const statusColor =
-    statusType === "success"
-      ? "green"
-      : statusType === "error"
-      ? "red"
-      : statusType === "info"
-      ? "#444"
-      : "inherit";
+  }
 
   return (
-    <div>
+    <section style={{ padding: "1.5rem 0" }}>
       <h2>Teacher – Bulk Certificates</h2>
-      <p>Fill the table below to issue multiple certificates in one transaction.</p>
+      <p style={{ marginBottom: "1rem" }}>
+        Fill multiple rows, upload certificate images, then issue them all in one go
+        using a single blockchain transaction.
+      </p>
 
-      {/* Number of certificates */}
-      <div style={{ marginTop: "10px", marginBottom: "10px" }}>
+      {/* Controls: how many rows */}
+      <div
+        style={{
+          marginBottom: "1rem",
+          padding: "0.75rem",
+          borderRadius: "8px",
+          border: "1px solid #ddd",
+          maxWidth: 500,
+        }}
+      >
         <label>
-          Number of certificates:&nbsp;
+          Number of certificates (rows):
           <input
             type="number"
             min={1}
-            max={50}
-            value={count}
-            onChange={handleCountChange}
-            style={{ width: "80px" }}
+            max={500}
+            value={rowsCountInput}
+            onChange={(e) => setRowsCountInput(e.target.value)}
+            style={{ marginLeft: "0.5rem", width: "80px" }}
           />
         </label>
+        <button
+          type="button"
+          onClick={handleGenerateRows}
+          style={{ marginLeft: "0.75rem", padding: "0.35rem 0.75rem" }}
+        >
+          Generate Rows
+        </button>
+        <div style={{ fontSize: "0.8rem", marginTop: "0.25rem" }}>
+          Example: enter <b>20</b> or <b>300</b> to create that many rows.
+          Increasing the number keeps existing data.
+        </div>
       </div>
 
-      {/* Editable table */}
       <table
         style={{
+          width: "100%",
           borderCollapse: "collapse",
-          minWidth: "700px",
-          fontSize: "14px",
+          marginBottom: "1rem",
         }}
       >
         <thead>
           <tr>
-            <th style={{ borderBottom: "1px solid #ccc", padding: "4px 8px" }}>#</th>
-            <th style={{ borderBottom: "1px solid #ccc", padding: "4px 8px", textAlign: "left" }}>
-              Student Name
+            <th style={{ textAlign: "left", padding: "0.5rem" }}>Student</th>
+            <th style={{ textAlign: "left", padding: "0.5rem" }}>Course</th>
+            <th style={{ textAlign: "left", padding: "0.5rem" }}>Class</th>
+            <th style={{ textAlign: "left", padding: "0.5rem" }}>
+              Student Wallet (optional)
             </th>
-            <th style={{ borderBottom: "1px solid #ccc", padding: "4px 8px", textAlign: "left" }}>
-              Course
+            <th style={{ textAlign: "left", padding: "0.5rem" }}>
+              Certificate Image
             </th>
-            <th style={{ borderBottom: "1px solid #ccc", padding: "4px 8px", textAlign: "left" }}>
-              Class / Batch (optional)
-            </th>
-            <th style={{ borderBottom: "1px solid #ccc", padding: "4px 8px", textAlign: "left" }}>
-              CID
-            </th>
+            <th style={{ textAlign: "left", padding: "0.5rem" }}>CID</th>
+            <th style={{ textAlign: "left", padding: "0.5rem" }}>Status</th>
+            <th style={{ padding: "0.5rem" }}>Actions</th>
           </tr>
         </thead>
         <tbody>
-          {rows.map((r, idx) => (
-            <tr key={idx}>
-              <td
-                style={{
-                  borderBottom: "1px solid #eee",
-                  padding: "4px 8px",
-                  textAlign: "center",
-                }}
-              >
-                {idx + 1}
-              </td>
-              <td style={{ borderBottom: "1px solid #eee", padding: "4px 8px" }}>
-                <input
-                  style={{ width: "100%" }}
-                  value={r.name}
-                  onChange={(e) => handleRowChange(idx, "name", e.target.value)}
-                  placeholder="Ali Raza"
-                />
-              </td>
-              <td style={{ borderBottom: "1px solid #eee", padding: "4px 8px" }}>
-                <input
-                  style={{ width: "100%" }}
-                  value={r.course}
-                  onChange={(e) => handleRowChange(idx, "course", e.target.value)}
-                  placeholder="Blockchain Fundamentals"
-                />
-              </td>
-              <td style={{ borderBottom: "1px solid #eee", padding: "4px 8px" }}>
-                <input
-                  style={{ width: "100%" }}
-                  value={r.className}
-                  onChange={(e) => handleRowChange(idx, "className", e.target.value)}
-                  placeholder="BSCS-8A (optional)"
-                />
-              </td>
-              <td style={{ borderBottom: "1px solid #eee", padding: "4px 8px" }}>
-                <input
-                  style={{ width: "100%" }}
-                  value={r.cid}
-                  onChange={(e) => handleRowChange(idx, "cid", e.target.value)}
-                  placeholder="Qm... or bafy..."
-                />
-              </td>
-            </tr>
-          ))}
+          {rows.map((row) => {
+            const previewUrl = row.cid ? filebaseGatewayUrl(row.cid) : "";
+
+            return (
+              <tr key={row.id}>
+                <td style={{ padding: "0.5rem" }}>
+                  <input
+                    type="text"
+                    value={row.name}
+                    onChange={(e) =>
+                      updateRow(row.id, { name: e.target.value })
+                    }
+                    placeholder="Student name"
+                  />
+                </td>
+                <td style={{ padding: "0.5rem" }}>
+                  <input
+                    type="text"
+                    value={row.course}
+                    onChange={(e) =>
+                      updateRow(row.id, { course: e.target.value })
+                    }
+                    placeholder="Course"
+                  />
+                </td>
+                <td style={{ padding: "0.5rem" }}>
+                  <input
+                    type="text"
+                    value={row.className}
+                    onChange={(e) =>
+                      updateRow(row.id, { className: e.target.value })
+                    }
+                    placeholder="Class (optional)"
+                  />
+                </td>
+                <td style={{ padding: "0.5rem" }}>
+                  <input
+                    type="text"
+                    value={row.wallet}
+                    onChange={(e) =>
+                      updateRow(row.id, { wallet: e.target.value })
+                    }
+                    placeholder="0x... (optional)"
+                  />
+                </td>
+                <td style={{ padding: "0.5rem" }}>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) =>
+                      handleFileChange(row.id, e.target.files?.[0] || null)
+                    }
+                    disabled={row.uploading}
+                  />
+                  {previewUrl && (
+                    <div style={{ marginTop: "0.25rem" }}>
+                      <a
+                        href={previewUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Preview
+                      </a>
+                    </div>
+                  )}
+                </td>
+                <td style={{ padding: "0.5rem" }}>
+                  <input
+                    type="text"
+                    value={row.cid}
+                    readOnly
+                    placeholder="CID will appear after upload"
+                    style={{ width: "100%" }}
+                  />
+                </td>
+                <td style={{ padding: "0.5rem", fontSize: "0.85rem" }}>
+                  {row.uploadStatus && (
+                    <div style={{ marginBottom: "0.25rem" }}>
+                      {row.uploadStatus}
+                    </div>
+                  )}
+                  {row.error && (
+                    <div style={{ color: "red" }}>{row.error}</div>
+                  )}
+                </td>
+                <td style={{ padding: "0.5rem", textAlign: "center" }}>
+                  <button
+                    type="button"
+                    onClick={() => removeRow(row.id)}
+                    style={{ cursor: "pointer" }}
+                  >
+                    ✕
+                  </button>
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
 
-      <button
-        style={{
-          marginTop: "16px",
-          padding: "8px 20px",
-          background: isSubmitting ? "#555" : "black",
-          color: "white",
-          borderRadius: "8px",
-          cursor: isSubmitting ? "not-allowed" : "pointer",
-        }}
-        onClick={handleIssue}
-        disabled={isSubmitting}
-      >
-        {isSubmitting ? "Issuing..." : "Issue All"}
-      </button>
+      <div style={{ display: "flex", gap: "0.75rem" }}>
+        <button
+          type="button"
+          onClick={addRow}
+          style={{ padding: "0.5rem 1rem", cursor: "pointer" }}
+        >
+          + Add Row
+        </button>
+
+        <button
+          type="button"
+          onClick={handleIssueAll}
+          style={{ padding: "0.75rem 1.5rem", cursor: "pointer" }}
+        >
+          Issue All Certificates (1 Tx)
+        </button>
+      </div>
 
       {status && (
-        <div
+        <pre
           style={{
-            marginTop: "16px",
-            padding: "10px",
+            marginTop: "1rem",
+            whiteSpace: "pre-wrap",
+            padding: "0.75rem",
             background: "#f8f8f8",
             borderRadius: "8px",
-            color: statusColor,
-            whiteSpace: "pre-wrap",
           }}
         >
           {status}
-        </div>
+        </pre>
       )}
-    </div>
+    </section>
   );
-}
+};
+
+export default Bulk;
