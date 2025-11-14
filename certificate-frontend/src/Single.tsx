@@ -1,48 +1,51 @@
+// src/Single.tsx
 import React, { useState } from "react";
 import { ethers } from "ethers";
 import { resolveCertificate } from "./ethers-client";
 import { pushIssued } from "./libs/store";
+import { uploadToIpfsFilebase, filebaseGatewayUrl } from "./ipfsClient";
 
 export default function Single() {
   const [name, setName] = useState("");
   const [course, setCourse] = useState("");
-  const [className, setClassName] = useState(""); // OPTIONAL
-  const [studentWallet, setStudentWallet] = useState("");
+  const [className, setClassName] = useState(""); // optional
+  const [studentWallet, setStudentWallet] = useState(""); // optional
   const [cid, setCid] = useState("");
-  const [status, setStatus] = useState("");
 
+  const [status, setStatus] = useState("");
+  const [uploadStatus, setUploadStatus] = useState("");
+  const [isUploading, setIsUploading] = useState(false);
+
+  // ----------------- ISSUE CERTIFICATE -----------------
   const issueCertificate = async () => {
     setStatus("");
 
-    // ---------- VALIDATION ----------
+    // ----- VALIDATION -----
     if (!name || !course || !cid) {
       setStatus("❗ Please enter Student Name, Course, and CID.");
       return;
     }
 
-    // Validate wallet only if provided
+    // Wallet only if provided
     let issuedTo = ethers.ZeroAddress;
-    const trimmedWallet = studentWallet.trim();
-    if (trimmedWallet !== "") {
-      if (!ethers.isAddress(trimmedWallet)) {
+    const trimmed = studentWallet.trim();
+    if (trimmed) {
+      if (!ethers.isAddress(trimmed)) {
         setStatus("❗ Invalid student wallet address.");
         return;
       }
-      issuedTo = trimmedWallet;
+      issuedTo = trimmed;
     }
 
     try {
       setStatus("⏳ Connecting to MetaMask...");
-
-      // NOTE: your ethers-client.js defines resolveCertificate() with NO arguments
       const cert = await resolveCertificate();
 
       setStatus("⏳ Sending transaction...");
-
       const tx = await cert.addCertificate(
         name,
         course,
-        className || "", // pass empty string if not provided
+        className || "",
         cid,
         issuedTo
       );
@@ -52,7 +55,7 @@ export default function Single() {
 
       const nowSec = Math.floor(Date.now() / 1000);
 
-      // Save into local admin-issued storage
+      // Save in Admin – Issued (local)
       pushIssued({
         cid,
         name,
@@ -65,31 +68,60 @@ export default function Single() {
       });
 
       setStatus(
-        `✅ Certificate Issued Successfully!
+        `✅ Certificate issued successfully!
 Tx: ${receipt.hash}
 CID: ${cid}`
       );
 
-      // Clear fields
+      // Reset form
       setName("");
       setCourse("");
       setClassName("");
       setStudentWallet("");
       setCid("");
+      setUploadStatus("");
     } catch (err) {
       console.error(err);
-      setStatus("❌ Error issuing certificate.");
+      setStatus("❌ Error issuing certificate. Check console / MetaMask.");
     }
   };
 
+  // ----------------- HANDLE FILE → IPFS UPLOAD -----------------
+  const handleFileChange = async (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      setIsUploading(true);
+      setUploadStatus("⏳ Uploading to IPFS via Filebase...");
+
+      const newCid = await uploadToIpfsFilebase(file);
+
+      setCid(newCid);
+      setUploadStatus(`✅ Uploaded to IPFS. CID: ${newCid}`);
+    } catch (err: any) {
+      console.error(err);
+      const msg = err?.message || String(err);
+      setUploadStatus(`❌ IPFS upload failed: ${msg}`);
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const previewUrl = cid ? filebaseGatewayUrl(cid) : "";
+
+  // ----------------- RENDER -----------------
   return (
     <div>
       <h2>Teacher – Single Certificate</h2>
       <p>Issue a single blockchain certificate and store it in Admin Issued.</p>
 
+      {/* BASIC FIELDS */}
       <div style={{ marginTop: "20px" }}>
         <label>
-          Student Name:
+          Student Name:&nbsp;
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -98,7 +130,7 @@ CID: ${cid}`
         </label>
 
         <label style={{ marginLeft: "10px" }}>
-          Course:
+          Course:&nbsp;
           <input
             value={course}
             onChange={(e) => setCourse(e.target.value)}
@@ -107,7 +139,7 @@ CID: ${cid}`
         </label>
 
         <label style={{ marginLeft: "10px" }}>
-          Class / Batch (optional):
+          Class / Batch (optional):&nbsp;
           <input
             value={className}
             onChange={(e) => setClassName(e.target.value)}
@@ -116,35 +148,95 @@ CID: ${cid}`
         </label>
 
         <label style={{ marginLeft: "10px" }}>
-          Student Wallet (optional):
+          Student Wallet (optional):&nbsp;
           <input
             value={studentWallet}
             onChange={(e) => setStudentWallet(e.target.value)}
             placeholder="0x..."
           />
         </label>
+      </div>
 
-        <label style={{ marginLeft: "10px" }}>
-          IPFS CID:
-          <input
-            value={cid}
-            onChange={(e) => setCid(e.target.value)}
-            placeholder="bafy... or Qm..."
-          />
-        </label>
+      {/* IPFS UPLOAD */}
+      <div style={{ marginTop: "20px" }}>
+        <div>
+          <label>
+            Certificate Image:&nbsp;
+            <input
+              type="file"
+              accept="image/*"
+              onChange={handleFileChange}
+              disabled={isUploading}
+            />
+          </label>
+        </div>
+
+        <div style={{ marginTop: "8px" }}>
+          <label>
+            IPFS CID:&nbsp;
+            <input
+              style={{ minWidth: "320px" }}
+              value={cid}
+              onChange={(e) => setCid(e.target.value)}
+              placeholder="Qm... or bafy..."
+            />
+          </label>
+        </div>
+
+        {uploadStatus && (
+          <div
+            style={{
+              marginTop: "8px",
+              fontSize: "13px",
+              color: uploadStatus.startsWith("✅")
+                ? "green"
+                : uploadStatus.startsWith("❌")
+                ? "red"
+                : "#444",
+            }}
+          >
+            {uploadStatus}
+          </div>
+        )}
+
+        {previewUrl && (
+          <div style={{ marginTop: "10px" }}>
+            <strong>Preview:</strong>
+            <div style={{ marginTop: "6px" }}>
+              <img
+                src={previewUrl}
+                alt="Certificate preview"
+                style={{
+                  width: "200px",
+                  height: "200px",
+                  objectFit: "cover",
+                  border: "1px solid #ccc",
+                  borderRadius: "8px",
+                }}
+              />
+            </div>
+            <div style={{ marginTop: "4px", fontSize: "12px" }}>
+              <a href={previewUrl} target="_blank" rel="noreferrer">
+                {previewUrl}
+              </a>
+            </div>
+          </div>
+        )}
       </div>
 
       <button
         style={{
           marginTop: "20px",
           padding: "10px 20px",
-          background: "black",
+          background: isUploading ? "#555" : "black",
           color: "white",
           borderRadius: "8px",
+          cursor: isUploading ? "not-allowed" : "pointer",
         }}
         onClick={issueCertificate}
+        disabled={isUploading}
       >
-        Issue Certificate
+        {isUploading ? "Uploading..." : "Issue Certificate"}
       </button>
 
       {status && (

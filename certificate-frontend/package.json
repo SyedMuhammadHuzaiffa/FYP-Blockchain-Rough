@@ -10,7 +10,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@lighthouse-web3/sdk": "^0.4.3",
     "ethers": "^6.15.0",
+    "nft.storage": "^7.2.0",
     "papaparse": "^5.5.3",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
