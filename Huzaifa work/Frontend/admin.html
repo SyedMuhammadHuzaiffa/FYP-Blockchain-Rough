@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CertChain • Admin</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="css/styles.css" rel="stylesheet">
+</head>
+
+<body>
+    <nav class="navbar navbar-expand-lg bg-body-tertiary">
+        <div class="container">
+            <a class="navbar-brand fw-bold" href="./index.html">CertChain</a>
+        </div>
+    </nav>
+
+    <main class="container py-4">
+        <h2 class="mb-3">Admin (Frontend Only)</h2>
+
+        <!-- Batch Issuance Preview -->
+        <div class="card p-3 mb-4">
+            <div class="d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">Batch Issuance Preview</h5>
+                <span class="badge text-bg-secondary">Demo</span>
+            </div>
+            <p class="text-secondary mb-3">Upload CSV or JSON to preview certificates before issuing. This page is
+                frontend-only for FYP-I.</p>
+
+            <div class="row g-2 mb-2">
+                <div class="col-md-8">
+                    <input type="file" id="file" accept=".csv,.json" class="form-control">
+                </div>
+                <div class="col-md-4 d-flex align-items-center">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="confirm">
+                        <label class="form-check-label" for="confirm">
+                            I confirm the data looks correct
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <div id="previewWrap" class="table-responsive d-none">
+                <table class="table table-sm table-striped align-middle">
+                    <thead class="table-light">
+                        <tr>
+                            <th>ID</th>
+                            <th>Holder</th>
+                            <th>Program</th>
+                            <th>Issued</th>
+                            <th>Hash</th>
+                        </tr>
+                    </thead>
+                    <tbody id="previewRows"></tbody>
+                </table>
+            </div>
+
+            <div id="previewInfo" class="small text-secondary mb-2"></div>
+
+            <div class="d-flex gap-2">
+                <button id="submit" class="btn btn-primary" disabled>Submit (Mock)</button>
+                <button id="clear" class="btn btn-outline-secondary" disabled>Clear</button>
+            </div>
+        </div>
+
+        <!-- Revoke -->
+        <div class="card p-3">
+            <h5>Revoke Certificate</h5>
+            <p class="text-secondary">Enter a certificate ID to mark it as revoked (mock). If connected to a real API
+                later, this button will call it.</p>
+
+            <div class="row g-2">
+                <div class="col-sm-5">
+                    <input id="revokeId" class="form-control" placeholder="Certificate ID (e.g., CERT-002)" />
+                </div>
+                <div class="col-sm-5">
+                    <input id="reason" class="form-control" placeholder="Reason (optional)" />
+                </div>
+                <div class="col-sm-2 d-grid">
+                    <button id="revokeBtn" class="btn btn-outline-danger">Revoke</button>
+                </div>
+            </div>
+
+            <div id="revokeMsg" class="mt-3"></div>
+        </div>
+    </main>
+
+    <!-- Order matters: config -> data -> api -> utils -->
+    <script src="./scripts/config.js"></script>
+    <script src="./scripts/data.js"></script>
+    <script src="./scripts/api.js"></script>
+    <script src="./scripts/utils.js"></script>
+
+    <script>
+        (function () {
+            // ---- Batch Issuance Preview (Mock) ----
+            const fileInput = document.getElementById('file');
+            const previewWrap = document.getElementById('previewWrap');
+            const previewRows = document.getElementById('previewRows');
+            const previewInfo = document.getElementById('previewInfo');
+            const submitBtn = document.getElementById('submit');
+            const clearBtn = document.getElementById('clear');
+            const confirmChk = document.getElementById('confirm');
+
+            let rows = [];
+
+            function enableActions() {
+                const ok = rows.length > 0 && confirmChk.checked;
+                submitBtn.disabled = !ok;
+                clearBtn.disabled = rows.length === 0;
+            }
+
+            function renderPreview() {
+                if (rows.length === 0) {
+                    previewWrap.classList.add('d-none');
+                    previewRows.innerHTML = '';
+                    previewInfo.textContent = '';
+                    enableActions();
+                    return;
+                }
+                previewWrap.classList.remove('d-none');
+                previewRows.innerHTML = rows.slice(0, 50).map(r => `
+      <tr>
+        <td>${r.id || ''}</td>
+        <td>${r.holder || ''}</td>
+        <td>${r.program || ''}</td>
+        <td>${UI.fmtDate(r.issuedAt || '')}</td>
+        <td><code>${r.hash || ''}</code></td>
+      </tr>
+    `).join('');
+                previewInfo.textContent = `Loaded ${rows.length} row(s). Showing first ${Math.min(50, rows.length)}.`;
+                enableActions();
+            }
+
+            function parseCsv(text) {
+                // naive CSV parser (id,holder,program,issuedAt,hash)
+                return text
+                    .split(/\r?\n/)
+                    .map(l => l.trim())
+                    .filter(Boolean)
+                    .map(line => {
+                        const [id, holder, program, issuedAt, hash] = line.split(',');
+                        return { id, holder, program, issuedAt, hash, status: 'valid' };
+                    });
+            }
+
+            fileInput.addEventListener('change', async () => {
+                rows = [];
+                renderPreview();
+                const f = fileInput.files && fileInput.files[0];
+                if (!f) return;
+                try {
+                    const text = await f.text();
+                    if (f.name.toLowerCase().endsWith('.json')) {
+                        const parsed = JSON.parse(text);
+                        rows = Array.isArray(parsed) ? parsed : [];
+                    } else {
+                        rows = parseCsv(text);
+                    }
+                } catch {
+                    previewInfo.className = 'text-danger';
+                    previewInfo.textContent = 'Failed to parse file.';
+                    return;
+                }
+                previewInfo.className = 'small text-secondary mb-2';
+                renderPreview();
+            });
+
+            confirmChk.addEventListener('change', enableActions);
+
+            clearBtn.addEventListener('click', () => {
+                rows = [];
+                fileInput.value = '';
+                confirmChk.checked = false;
+                renderPreview();
+            });
+
+            submitBtn.addEventListener('click', async () => {
+                submitBtn.disabled = true;
+
+                // If a real API base is configured, try a POST (no API helper for this one by design)
+                const BASE = (window.CONFIG && window.CONFIG.API_BASE) || '';
+                if (BASE) {
+                    try {
+                        const res = await fetch(`${BASE}/issue-batch`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ certificates: rows })
+                        });
+                        if (!res.ok) throw new Error('HTTP ' + res.status);
+                        const data = await res.json().catch(() => ({}));
+                        alert('Batch submitted to backend. Response: ' + JSON.stringify(data));
+                        return;
+                    } catch (e) {
+                        alert('Attempted real submit but failed: ' + e.message + '. Falling back to mock.');
+                    }
+                }
+
+                // Mock behavior: push rows into in-memory CERTS if not existing
+                let inserted = 0, skipped = 0;
+                rows.forEach(r => {
+                    if (!r || !r.id) return skipped++;
+                    const exists = window.CERTS.some(c => c.id === r.id);
+                    if (exists) { skipped++; return; }
+                    window.CERTS.push({
+                        id: r.id,
+                        studentId: r.studentId || 'unknown',
+                        holder: r.holder || '',
+                        program: r.program || '',
+                        issuedAt: r.issuedAt || '',
+                        hash: r.hash || '',
+                        status: r.status || 'valid',
+                        txUrl: r.txUrl || ''
+                    });
+                    inserted++;
+                });
+                alert(`Mock submit completed. Inserted: ${inserted}, Skipped (duplicates/invalid): ${skipped}.`);
+            });
+
+            // ---- Revoke (uses API.revokeCertificate) ----
+            const revokeBtn = document.getElementById('revokeBtn');
+            const revokeMsg = document.getElementById('revokeMsg');
+
+            revokeBtn.addEventListener('click', async () => {
+                const id = document.getElementById('revokeId').value.trim();
+                const reason = document.getElementById('reason').value.trim();
+                if (!id) {
+                    revokeMsg.innerHTML = `<div class="alert alert-warning">Enter a certificate ID.</div>`;
+                    return;
+                }
+                revokeMsg.innerHTML = `
+      <div class="alert alert-light border d-flex align-items-center">
+        <div class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></div>
+        Processing…
+      </div>`;
+                try {
+                    const res = await window.API.revokeCertificate(id, reason);
+                    revokeMsg.innerHTML = res && res.ok
+                        ? `<div class="alert alert-success">Revoked <strong>${id}</strong>.</div>`
+                        : `<div class="alert alert-warning">Could not revoke ${id}: ${res && res.message ? res.message : 'Unknown error'}</div>`;
+                } catch (e) {
+                    revokeMsg.innerHTML = `<div class="alert alert-danger">Failed to revoke. ${e.message || ''}</div>`;
+                }
+            });
+        })();
+    </script>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+
+</html>

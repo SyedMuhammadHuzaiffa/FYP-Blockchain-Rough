@@ -1,0 +1,9 @@
+[
+  {
+    "inputs":[{"internalType":"string","name":"keyStr","type":"string"}],
+    "name":"getAddressByString",
+    "outputs":[{"internalType":"address","name":"","type":"address"}],
+    "stateMutability":"view",
+    "type":"function"
+  }
+]

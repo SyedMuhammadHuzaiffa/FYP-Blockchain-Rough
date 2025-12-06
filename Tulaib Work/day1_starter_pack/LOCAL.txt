@@ -1,0 +1,9 @@
+# Day 1 Local Deployment Notes
+
+Ganache RPC: http://127.0.0.1:7545
+Chain ID: 1337 or 5777 (write actual): ______
+
+LOCAL_DEPLOYED_ADDRESS=0xeD1000Cb8Ae8044F421F6390a1CE3BE1C3815c6c
+
+Notes / screenshots path:
+- verifyCertificate_screenshot: ./screenshots/verifyCertificate.png

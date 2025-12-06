@@ -1,0 +1,78 @@
+/* Global tweaks on top of Bootstrap */
+html,
+body {
+    height: 100%;
+}
+
+body {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: "ss01" 1;
+}
+
+/* Navbar & headings */
+.navbar-brand {
+    letter-spacing: .2px;
+}
+
+/* Cards & badges */
+.card .badge,
+.badge.text-uppercase {
+    letter-spacing: .06em;
+}
+
+/* Tables */
+.table th,
+.table td {
+    vertical-align: middle;
+}
+
+/* Alerts with inline code */
+.alert code {
+    background: rgba(0, 0, 0, .04);
+    padding: .15rem .35rem;
+    border-radius: .25rem;
+}
+
+/* Video preview (QR scan) */
+#video {
+    object-fit: cover;
+}
+
+/* Utility spacing for small buttons */
+.btn.btn-sm {
+    border-radius: 12px;
+}
+
+/* Links */
+a {
+    text-decoration-thickness: .08em;
+    text-underline-offset: 2px;
+}
+
+/* Print-friendly certificate page */
+@media print {
+
+    nav,
+    .navbar,
+    .btn,
+    .alert,
+    .badge.text-bg-danger,
+    .badge.text-bg-warning {
+        display: none !important;
+    }
+
+    .card {
+        border: none;
+        box-shadow: none;
+    }
+
+    .container {
+        max-width: 100% !important;
+    }
+
+    body {
+        background: #fff !important;
+    }
+}

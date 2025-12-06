@@ -1,0 +1,5 @@
+{
+  "address": "0xYOUR_REGISTRY_OR_CONTRACT_ADDRESS",
+  "rpcUrl": "https://rpc-amoy.polygon.technology",
+  "explorer": "https://www.oklink.com/amoy" 
+}
