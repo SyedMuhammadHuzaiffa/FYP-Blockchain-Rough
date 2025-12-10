@@ -1,16 +1,34 @@
-// client/components/Topbar.tsx
-import React from 'react'
-import WalletConnect from './WalletConnect'
+// src/app/components/Topbar.tsx
+'use client'
 
-export default function Topbar({ title = 'Admin Dashboard' }: { title?: string }) {
+import { useState } from 'react'
+import Link from 'next/link'
+
+export default function Topbar() {
+  const [connected, setConnected] = useState(false)
+
   return (
-    <header className="flex items-center justify-between px-6 py-4 border-b bg-neutral-900 backdrop-blur">
-      <div className="flex items-center gap-4">
-        <button className="lg:hidden p-2 rounded-md">☰</button>
-        <h1 className="text-lg font-semibold">{title}</h1>
+    <header className="w-full border-b border-neutral-800/60 bg-neutral-900/30 p-4 flex items-center justify-between">
+      <div className="flex items-center space-x-4">
+        <button className="hidden md:inline-flex items-center px-2 py-1 rounded-md text-sm bg-neutral-800/60">
+          Menu
+        </button>
+
+        <h1 className="text-lg font-semibold">Dashboard</h1>
+        <nav className="hidden sm:flex items-center ml-4 space-x-3 text-sm text-neutral-300">
+          <Link href="/dashboard" className="hover:underline">Overview</Link>
+          <Link href="/revoke" className="hover:underline">Revoke</Link>
+        </nav>
       </div>
-      <div className="flex items-center gap-3">
-        <WalletConnect />
+
+      <div className="flex items-center space-x-3">
+        <div className="text-sm text-neutral-300">Account</div>
+        <button
+          onClick={() => setConnected((s) => !s)}
+          className="px-3 py-1 rounded-md text-sm bg-gradient-to-r from-neutral-700 to-neutral-600"
+        >
+          {connected ? 'Disconnect' : 'Connect Wallet'}
+        </button>
       </div>
     </header>
   )
