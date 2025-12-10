@@ -1,21 +1,23 @@
 import './globals.css'
-import Sidebar from '../app/components/Sidebar'
-import Topbar from '../app/components/Topbar'
-
-export const metadata = {
-  title: 'FYP Certificates',
-  description: 'Admin dashboard & public verification',
-}
+import Sidebar from './components/Sidebar' // ✅ make sure path is correct
+import Topbar from './components/Topbar'
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
+  const sidebarLinks = [
+    { href: '/', label: 'Home' },
+    { href: '/dashboard', label: 'Dashboard' },
+    { href: '/revoke', label: 'Revoke' },
+    // add more routes if needed
+  ]
+
   return (
     <html lang="en">
-      <body className="bg-neutral-900 min-h-screen text-white">
-        <div className="flex min-h-screen">
-          <Sidebar />
-          <div className="flex-1 flex flex-col">
+      <body className="min-h-screen antialiased bg-[var(--background)] text-[var(--foreground)]">
+        <div className="min-h-screen flex">
+          <Sidebar links={sidebarLinks} />
+          <div className="flex-1 min-h-screen flex flex-col">
             <Topbar />
-            <main className="p-6">{children}</main>
+            <main className="flex-1 p-6">{children}</main>
           </div>
         </div>
       </body>
