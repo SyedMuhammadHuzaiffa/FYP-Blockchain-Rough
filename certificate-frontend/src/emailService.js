@@ -3,7 +3,6 @@
 // npm install @emailjs/browser
 
 // ─── YOUR EMAILJS CREDENTIALS ────────────────────────────────────────────────
-// Get these from https://www.emailjs.com → Account → API Keys
 export const EMAILJS_CONFIG = {
   SERVICE_ID:  "service_ks4tobq",   // e.g. "service_abc123"
   TEMPLATE_ID: "template_6wr17ai",  // e.g. "template_xyz789"
@@ -17,27 +16,29 @@ export async function sendCertificateEmail({
   competition,
   cid,
   txHash,
-  imageDataUrl,   // base64 image of certificate
-  verifyUrl,
 }) {
   const emailjs = (await import("@emailjs/browser")).default;
 
-  // Build explorer URL
-  const explorerUrl = txHash
-    ? `https://amoy.polygonscan.com/tx/${txHash}`
-    : "";
+  const origin = window.location.origin;
 
-  // Template parameters — match these with your EmailJS template variables
+  // ✅ Full clickable verify URL with encoded CID — never gets truncated
+  const verifyUrl   = `${origin}?tab=verify&cid=${encodeURIComponent(cid)}`;
+  const explorerUrl = txHash ? `https://amoy.polygonscan.com/tx/${txHash}` : "";
+  const imageUrl    = `https://gateway.pinata.cloud/ipfs/${cid}`;
+
   const templateParams = {
-    to_email:       toEmail,
-    to_name:        toName,
-    competition:    competition,
-    cid:            cid,
-    verify_url:     verifyUrl,
-    explorer_url:   explorerUrl,
-    tx_hash:        txHash || "N/A",
-    image_url:      `https://gateway.pinata.cloud/ipfs/${cid}`,
-    issued_date:    new Date().toLocaleDateString("en-GB", {
+    to_email:      toEmail,
+    to_name:       toName,
+    competition:   competition,
+    // ✅ Send full clickable URL — student just clicks, no copying needed
+    verify_url:    verifyUrl,
+    explorer_url:  explorerUrl,
+    image_url:     imageUrl,
+    // ✅ Also send short CID for display — but student should CLICK not copy
+    cid_short:     cid.slice(0, 20) + "...",
+    cid_full:      cid,
+    tx_hash:       txHash ? txHash.slice(0, 20) + "..." : "N/A",
+    issued_date:   new Date().toLocaleDateString("en-GB", {
       day: "2-digit", month: "long", year: "numeric"
     }),
   };
@@ -52,7 +53,7 @@ export async function sendCertificateEmail({
   return response;
 }
 
-// ─── Send bulk emails with delay to avoid rate limiting ──────────────────────
+// ─── Send bulk emails ─────────────────────────────────────────────────────────
 export async function sendBulkEmails(recipients, onProgress) {
   const results = [];
 
@@ -69,18 +70,17 @@ export async function sendBulkEmails(recipients, onProgress) {
       if (onProgress) onProgress(i + 1, recipients.length, "sending", rec.name);
 
       await sendCertificateEmail({
-        toEmail:      rec.email,
-        toName:       rec.name,
-        competition:  rec.competition || rec.course,
-        cid:          rec.cid,
-        txHash:       rec.txHash,
-        verifyUrl:    `${window.location.origin}?tab=verify&cid=${rec.cid}`,
+        toEmail:     rec.email,
+        toName:      rec.name,
+        competition: rec.competition || rec.course,
+        cid:         rec.cid,
+        txHash:      rec.txHash,
       });
 
       results.push({ ...rec, emailStatus: "sent" });
       if (onProgress) onProgress(i + 1, recipients.length, "sent", rec.name);
 
-      // Wait 1 second between emails to avoid rate limiting (EmailJS free = 200/month)
+      // 1.2 second delay between emails — EmailJS free = 200/month limit
       if (i < recipients.length - 1) {
         await new Promise(r => setTimeout(r, 1200));
       }
