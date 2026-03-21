@@ -10,6 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@emailjs/browser": "^4.4.1",
     "@lighthouse-web3/sdk": "^0.4.3",
     "@types/qrcode": "^1.5.6",
     "ethers": "^6.15.0",

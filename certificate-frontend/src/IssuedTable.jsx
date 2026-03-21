@@ -1,64 +1,235 @@
 // src/IssuedTable.jsx
-import React, { useEffect, useState } from "react";
-import {
-  getIssued,
-  setRevoked,
-  removeIssuedByCid,
-  clearIssued,
-} from "./libs/store";
+// Reads certificates from blockchain with smart block range + localStorage fallback
+
+import React, { useEffect, useState, useCallback } from "react";
+import { ethers } from "ethers";
 import { filebaseGatewayUrl } from "./ipfsClient";
+import { getBaseProvider } from "./ethers-client";
+import { getIssued, setRevoked, removeIssuedByCid, clearIssued } from "./libs/store";
+import registryMap from "./registry.json";
 import CertQRCode from "./QRCode.jsx";
+import EmailSender from "./EmailSender.jsx";
 
-export default function IssuedTable() {
-  const [list, setList]         = useState([]);
-  const [query, setQuery]       = useState("");
-  const [expandedQR, setExpandedQR] = useState(null);
-  const [copiedCid, setCopiedCid]   = useState("");
-  const [error, setError]           = useState("");
+const REGISTRY_ABI = [
+  "function getAddressByString(string keyStr) view returns (address)"
+];
+const CERT_ABI = [
+  "event CertificateAdded(string indexed ipfsHash, string studentName, string course, string className, address indexed issuedTo, uint256 issuedAt)"
+];
 
-  useEffect(() => {
+// ─── Smart block range fetcher ────────────────────────────────────────────────
+// Tries progressively smaller ranges until RPC accepts
+async function fetchCertificatesFromChain() {
+  const { provider } = await getBaseProvider();
+  const network  = await provider.getNetwork();
+  const chainId  = Number(network.chainId);
+
+  const regAddr = registryMap[String(chainId)];
+  if (!regAddr) throw new Error(`No registry for chainId ${chainId}`);
+
+  const registry = new ethers.Contract(regAddr, REGISTRY_ABI, provider);
+  const certAddr = await registry.getAddressByString("Certificate");
+  if (!certAddr || certAddr === ethers.ZeroAddress) {
+    throw new Error("Certificate contract not found in registry.");
+  }
+
+  const contract  = new ethers.Contract(certAddr, CERT_ABI, provider);
+  const latest    = await provider.getBlockNumber();
+  const filter    = contract.filters.CertificateAdded();
+
+  // Try different block ranges — from 500k down to 10k
+  const ranges = [500000, 200000, 100000, 50000, 20000, 10000];
+  let events = [];
+  let usedRange = 0;
+
+  for (const range of ranges) {
+    const fromBlock = Math.max(0, latest - range);
     try {
-      setList(getIssued());
+      events = await contract.queryFilter(filter, fromBlock, latest);
+      usedRange = range;
+      break; // success — stop trying
     } catch (err) {
-      setError("Failed to load certificates: " + (err?.message || String(err)));
+      const msg = err?.message || "";
+      if (msg.includes("block range") || msg.includes("coalesce") || msg.includes("limit")) {
+        continue; // try smaller range
+      }
+      throw err; // different error — rethrow
+    }
+  }
+
+  // Map to certificate records
+  const certs = events.map((ev) => ({
+    cid:         ev.args.ipfsHash,
+    name:        ev.args.studentName,
+    course:      ev.args.course,
+    className:   ev.args.className || "",
+    issuedTo:    ev.args.issuedTo,
+    issuedAt:    Number(ev.args.issuedAt),
+    txHash:      ev.transactionHash,
+    blockNumber: ev.blockNumber,
+    imageCid:    ev.args.ipfsHash,
+    revoked:     isRevokedLocally(ev.args.ipfsHash),
+    source:      "blockchain",
+  }));
+
+  return {
+    certs: certs.sort((a, b) => b.issuedAt - a.issuedAt),
+    usedRange,
+    latestBlock: latest,
+  };
+}
+
+// ─── Local revocation (off-chain) ─────────────────────────────────────────────
+const REVOKED_KEY = "revoked_cids_v1";
+
+function getRevokedSet() {
+  try {
+    const raw = localStorage.getItem(REVOKED_KEY);
+    return new Set(raw ? JSON.parse(raw) : []);
+  } catch { return new Set(); }
+}
+
+function isRevokedLocally(cid) {
+  return getRevokedSet().has(cid);
+}
+
+function toggleRevoked(cid, value) {
+  const set = getRevokedSet();
+  if (value) set.add(cid); else set.delete(cid);
+  localStorage.setItem(REVOKED_KEY, JSON.stringify([...set]));
+}
+
+// ─── Merge blockchain + localStorage (avoid duplicates) ──────────────────────
+function mergeCerts(chainCerts, localCerts) {
+  const chainCids = new Set(chainCerts.map(c => c.cid));
+  // Add local certs not found on chain (e.g. very old blocks)
+  const localOnly = localCerts
+    .filter(l => !chainCids.has(l.cid))
+    .map(l => ({ ...l, source: "local" }));
+  return [...chainCerts, ...localOnly];
+}
+
+// ─── Print one certificate ─────────────────────────────────────────────────────
+function printCertificate(rec) {
+  const imgUrl    = filebaseGatewayUrl(rec.imageCid || rec.cid);
+  const dateStr   = new Date(rec.issuedAt * 1000).toLocaleDateString("en-GB", { day:"2-digit", month:"long", year:"numeric" });
+  const verifyUrl = `${window.location.origin}?tab=verify&cid=${rec.cid}`;
+
+  import("qrcode").then((mod) => {
+    mod.default.toDataURL(verifyUrl, { width:120, margin:2 }).then((qrDataUrl) => {
+      const win = window.open("", "_blank", "width=920,height=700");
+      if (!win) { alert("Allow popups for this site."); return; }
+      win.document.write(`
+        <html><head><title>Certificate – ${rec.name}</title>
+        <style>
+          *{margin:0;padding:0;box-sizing:border-box;}
+          body{font-family:Georgia,serif;background:#fff;}
+          .cert{width:820px;margin:20px auto;border:8px double #1e3a5f;padding:36px 44px;background:linear-gradient(135deg,#fdfcfb,#f8f6f0);}
+          .header{text-align:center;margin-bottom:14px;}
+          .org{font-size:26px;font-weight:bold;color:#1e3a5f;}
+          hr{border:none;border-top:1px solid #c9a84c;margin:14px auto;width:75%;}
+          .body{text-align:center;margin:18px 0;}
+          .sname{font-size:38px;color:#1e3a5f;font-style:italic;margin:8px 0 12px;}
+          .cname{font-size:22px;font-weight:bold;color:#c9a84c;margin:4px 0 6px;}
+          .date{font-size:12px;color:#666;margin-top:6px;}
+          .cimg{text-align:center;margin:14px 0;}
+          .cimg img{max-width:320px;max-height:180px;object-fit:contain;border:1px solid #e5e7eb;border-radius:6px;}
+          .bottom{display:flex;justify-content:space-between;align-items:flex-end;margin-top:24px;}
+          .seal{width:80px;height:80px;border-radius:50%;border:3px double #c9a84c;display:flex;align-items:center;justify-content:center;font-size:9px;color:#c9a84c;font-weight:bold;text-align:center;padding:8px;}
+          .cidsec{flex:1;text-align:center;padding:0 16px;}
+          .cidlbl{font-size:9px;color:#aaa;margin-bottom:3px;}
+          .cidval{font-size:7px;color:#888;word-break:break-all;font-family:monospace;}
+          .txlbl{font-size:9px;color:#aaa;margin-top:5px;margin-bottom:2px;}
+          .txval{font-size:7px;color:#555;word-break:break-all;font-family:monospace;}
+          .qrsec{text-align:center;}
+          .qrsec img{border:2px solid #e2e8f0;border-radius:6px;display:block;}
+          .qrlbl{font-size:9px;color:#888;margin-top:3px;}
+        </style></head>
+        <body><div class="cert">
+          <div class="header">
+            <div style="font-size:11px;letter-spacing:4px;color:#1e3a5f;text-transform:uppercase;">This is to Certify that</div>
+            <div class="org">Blockchain Certificate System</div>
+            <div style="font-size:10px;color:#888;letter-spacing:3px;margin-top:2px;">POLYGON AMOY TESTNET · VERIFIED ON CHAIN</div>
+          </div>
+          <hr/>
+          <div class="body">
+            <div style="font-size:11px;color:#666;letter-spacing:2px;margin-bottom:6px;">PROUDLY PRESENTED TO</div>
+            <div class="sname">${rec.name}</div>
+            <div style="font-size:11px;color:#666;letter-spacing:1px;">has successfully completed</div>
+            <div class="cname">${rec.course}</div>
+            <div class="date">Issued on ${dateStr}</div>
+          </div>
+          ${imgUrl ? `<div class="cimg"><img src="${imgUrl}" alt="cert"/></div>` : ""}
+          <hr/>
+          <div class="bottom">
+            <div class="seal">OFFICIAL<br/>SEAL<br/>✦</div>
+            <div class="cidsec">
+              <div class="cidlbl">Certificate ID</div>
+              <div class="cidval">${rec.cid}</div>
+              <div class="txlbl">Blockchain Transaction</div>
+              <div class="txval">${rec.txHash || "—"}</div>
+            </div>
+            <div class="qrsec">
+              <img src="${qrDataUrl}" width="110" height="110" alt="QR"/>
+              <div class="qrlbl">Scan to Verify</div>
+            </div>
+          </div>
+        </div>
+        <script>setTimeout(function(){window.print();},800);</script>
+        </body></html>
+      `);
+      win.document.close();
+    });
+  }).catch(() => alert("Run: npm install qrcode"));
+}
+
+// ─── MAIN COMPONENT ───────────────────────────────────────────────────────────
+export default function IssuedTable() {
+  const [certs, setCerts]         = useState([]);
+  const [loading, setLoading]     = useState(true);
+  const [chainWarning, setChainWarning] = useState("");
+  const [chainInfo, setChainInfo]       = useState("");
+  const [error, setError]               = useState("");
+  const [query, setQuery]               = useState("");
+  const [expandedQR, setExpandedQR]     = useState(null);
+  const [copiedCid, setCopiedCid]       = useState("");
+  const [source, setSource]             = useState(""); // "blockchain" | "local" | "mixed"
+  const [showEmailSender, setShowEmailSender] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    setChainWarning("");
+    setChainInfo("");
+
+    // Always load local first for instant display
+    const localCerts = getIssued().map(l => ({ ...l, source:"local" }));
+
+    try {
+      const { certs: chainCerts, usedRange, latestBlock } = await fetchCertificatesFromChain();
+      const merged = mergeCerts(chainCerts, localCerts);
+      setCerts(merged);
+      setSource("blockchain");
+      setChainInfo(`✅ Live from blockchain · Last ${usedRange.toLocaleString()} blocks · Block #${latestBlock.toLocaleString()}`);
+    } catch (err) {
+      console.warn("Blockchain fetch failed, using localStorage:", err);
+      // Fallback to localStorage
+      setCerts(localCerts);
+      setSource("local");
+      setChainWarning("⚠️ Blockchain unavailable — showing local cache. " + (err?.message?.slice(0,120) || ""));
+    } finally {
+      setLoading(false);
     }
   }, []);
 
-  function refresh() {
-    try {
-      setList(getIssued());
-    } catch (err) {
-      setError("Failed to refresh: " + (err?.message || String(err)));
-    }
-  }
+  useEffect(() => { load(); }, [load]);
 
   function handleRevokeToggle(rec) {
-    try {
-      setRevoked(rec.cid, !rec.revoked);
-      refresh();
-    } catch (err) {
-      alert("Error: " + err?.message);
-    }
-  }
-
-  function handleRemove(rec) {
-    if (!window.confirm("Remove this record from local database?")) return;
-    try {
-      removeIssuedByCid(rec.cid);
-      refresh();
-    } catch (err) {
-      alert("Error: " + err?.message);
-    }
-  }
-
-  function handleClearAll() {
-    if (!window.confirm("Clear all locally stored certificates?")) return;
-    try {
-      clearIssued();
-      refresh();
-    } catch (err) {
-      alert("Error: " + err?.message);
-    }
+    const newVal = !rec.revoked;
+    toggleRevoked(rec.cid, newVal);
+    // Also update localStorage store if exists there
+    try { setRevoked(rec.cid, newVal); } catch {}
+    setCerts(prev => prev.map(c => c.cid === rec.cid ? { ...c, revoked: newVal } : c));
   }
 
   function handleCopyCid(cid) {
@@ -68,195 +239,178 @@ export default function IssuedTable() {
     });
   }
 
-  function handlePrintOne(rec) {
-    if (!rec) return;
-    const imgUrl    = rec.imageCid ? filebaseGatewayUrl(rec.imageCid) : filebaseGatewayUrl(rec.cid);
-    const dateStr   = new Date(rec.issuedAt * 1000).toLocaleDateString("en-GB", { day:"2-digit", month:"long", year:"numeric" });
-    const verifyUrl = `${window.location.origin}?tab=verify&cid=${rec.cid}`;
-    const explorerUrl = rec.txHash ? `https://amoy.polygonscan.com/tx/${rec.txHash}` : "";
-
-    import("qrcode").then((mod) => {
-      const QRCode = mod.default;
-      QRCode.toDataURL(verifyUrl, { width:120, margin:2 }).then((qrDataUrl) => {
-        const win = window.open("", "_blank", "width=920,height=700");
-        if (!win) { alert("Allow popups for this site."); return; }
-        win.document.write(`
-          <html><head><title>Certificate – ${rec.name}</title>
-          <style>
-            *{margin:0;padding:0;box-sizing:border-box;}
-            body{font-family:Georgia,serif;background:#fff;}
-            .cert{width:820px;margin:20px auto;border:8px double #1e3a5f;padding:36px 44px;background:linear-gradient(135deg,#fdfcfb,#f8f6f0);}
-            .header{text-align:center;margin-bottom:14px;}
-            .org{font-size:26px;font-weight:bold;color:#1e3a5f;}
-            hr{border:none;border-top:1px solid #c9a84c;margin:14px auto;width:75%;}
-            .body{text-align:center;margin:18px 0;}
-            .sname{font-size:38px;color:#1e3a5f;font-style:italic;margin:8px 0 12px;}
-            .cname{font-size:22px;font-weight:bold;color:#c9a84c;margin:4px 0 6px;}
-            .date{font-size:12px;color:#666;margin-top:6px;}
-            .cimg{text-align:center;margin:14px 0;}
-            .cimg img{max-width:320px;max-height:180px;object-fit:contain;border:1px solid #e5e7eb;border-radius:6px;}
-            .bottom{display:flex;justify-content:space-between;align-items:flex-end;margin-top:24px;}
-            .seal{width:80px;height:80px;border-radius:50%;border:3px double #c9a84c;display:flex;align-items:center;justify-content:center;font-size:9px;color:#c9a84c;font-weight:bold;text-align:center;padding:8px;}
-            .cidsec{flex:1;text-align:center;padding:0 16px;}
-            .cidlbl{font-size:9px;color:#aaa;margin-bottom:3px;}
-            .cidval{font-size:8px;color:#888;word-break:break-all;font-family:monospace;}
-            .txlbl{font-size:9px;color:#aaa;margin-top:6px;margin-bottom:2px;}
-            .txval{font-size:8px;color:#555;word-break:break-all;font-family:monospace;}
-            .qrsec{text-align:center;}
-            .qrsec img{border:2px solid #e2e8f0;border-radius:6px;display:block;}
-            .qrlbl{font-size:9px;color:#888;margin-top:3px;}
-          </style></head>
-          <body><div class="cert">
-            <div class="header">
-              <div style="font-size:11px;letter-spacing:4px;color:#1e3a5f;text-transform:uppercase;">This is to Certify that</div>
-              <div class="org">Blockchain Certificate System</div>
-              <div style="font-size:10px;color:#888;letter-spacing:3px;margin-top:2px;">POLYGON AMOY TESTNET · VERIFIED ON CHAIN</div>
-            </div>
-            <hr/>
-            <div class="body">
-              <div style="font-size:11px;color:#666;letter-spacing:2px;margin-bottom:6px;">PROUDLY PRESENTED TO</div>
-              <div class="sname">${rec.name}</div>
-              <div style="font-size:11px;color:#666;letter-spacing:1px;">has successfully completed the course</div>
-              <div class="cname">${rec.course || ""}</div>
-              <div class="date">Issued on ${dateStr}</div>
-            </div>
-            ${imgUrl ? `<div class="cimg"><img src="${imgUrl}" alt="cert"/></div>` : ""}
-            <hr/>
-            <div class="bottom">
-              <div class="seal">OFFICIAL<br/>SEAL<br/>✦</div>
-              <div class="cidsec">
-                <div class="cidlbl">Certificate ID</div>
-                <div class="cidval">${rec.cid}</div>
-                ${rec.txHash ? `<div class="txlbl">Blockchain Transaction</div><div class="txval">${rec.txHash}</div>` : ""}
-                ${explorerUrl ? `<div style="margin-top:6px;font-size:9px;color:#2563eb;">Verify: ${verifyUrl}</div>` : ""}
-              </div>
-              <div class="qrsec">
-                <img src="${qrDataUrl}" width="110" height="110" alt="QR"/>
-                <div class="qrlbl">Scan to Verify</div>
-              </div>
-            </div>
-          </div>
-          <script>setTimeout(function(){window.print();},800);</script>
-          </body></html>
-        `);
-        win.document.close();
-      });
-    }).catch(() => { alert("Run: npm install qrcode"); });
-  }
-
-  // ── Filtered list ──────────────────────────────────────────────────────────
-  const filtered = list.filter((rec) => {
+  const filtered = certs.filter((rec) => {
     if (!query.trim()) return true;
     const q = query.trim().toLowerCase();
     return (
-      (rec.name  || "").toLowerCase().includes(q) ||
+      (rec.name   || "").toLowerCase().includes(q) ||
       (rec.course || "").toLowerCase().includes(q) ||
-      (rec.cid   || "").toLowerCase().includes(q)
+      (rec.cid    || "").toLowerCase().includes(q)
     );
   });
 
-  // ── Error state ────────────────────────────────────────────────────────────
-  if (error) {
-    return (
-      <section style={{ padding:"1.5rem 0" }}>
-        <h2>Admin – Issued Certificates</h2>
-        <div style={{ padding:"16px 20px", background:"#fef2f2", border:"1px solid #fecaca", borderRadius:10, color:"#b91c1c", marginTop:16 }}>
-          <strong>Error loading certificates:</strong> {error}
-          <br /><br />
-          <button onClick={() => { setError(""); refresh(); }} style={{ padding:"8px 16px", background:"#fff", border:"1px solid #fecaca", borderRadius:6, cursor:"pointer", color:"#b91c1c", fontWeight:600 }}>
-            Try Again
-          </button>
-        </div>
-      </section>
-    );
-  }
-
   return (
     <section style={{ padding:"1.5rem 0" }}>
-      <h2>Admin – Issued Certificates</h2>
 
-      <div style={{ margin:"0.75rem 0", display:"flex", gap:"0.5rem", flexWrap:"wrap", alignItems:"center" }}>
+      {/* Header */}
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", flexWrap:"wrap", gap:12, marginBottom:12 }}>
+        <div>
+          <h2 style={{ margin:"0 0 4px", fontSize:22, fontWeight:800 }}>Admin – Issued Certificates</h2>
+          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+            <span style={{
+              fontSize:12, padding:"2px 8px", borderRadius:100, fontWeight:600,
+              background: source==="blockchain"?"#f0fdf4": source==="local"?"#fefce8":"#f8fafc",
+              color: source==="blockchain"?"#15803d": source==="local"?"#92400e":"#64748b",
+              border: `1px solid ${source==="blockchain"?"#bbf7d0": source==="local"?"#fde68a":"#e2e8f0"}`,
+            }}>
+              {source==="blockchain" ? "⛓ Blockchain" : source==="local" ? "💾 Local cache" : "⏳"}
+            </span>
+            {!loading && <span style={{ fontSize:12, color:"#64748b" }}>{certs.length} total</span>}
+          </div>
+        </div>
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+          <button onClick={load} disabled={loading} style={{
+            padding:"9px 18px", background:"#1e3a5f", color:"#fff",
+            border:"none", borderRadius:8, fontWeight:600, fontSize:13,
+            cursor: loading?"not-allowed":"pointer", opacity: loading?0.7:1,
+            display:"flex", alignItems:"center", gap:6,
+          }}>
+            {loading ? "⏳ Loading..." : "🔄 Refresh from Blockchain"}
+          </button>
+          <button
+            onClick={() => setShowEmailSender(true)}
+            disabled={certs.length === 0}
+            style={{
+              padding:"9px 18px", background:"linear-gradient(135deg,#7c3aed,#6d28d9)",
+              color:"#fff", border:"none", borderRadius:8, fontWeight:600, fontSize:13,
+              cursor: certs.length===0?"not-allowed":"pointer", opacity: certs.length===0?0.5:1,
+            }}
+          >
+            📧 Send Emails
+          </button>
+        </div>
+        {showEmailSender && (
+          <EmailSender
+            certificates={certs.filter(c => c.email).map(c => ({
+              name:        c.name,
+              email:       c.email || "",
+              course:      c.course,
+              competition: c.course,
+              cid:         c.cid,
+              txHash:      c.txHash,
+            }))}
+            onClose={() => setShowEmailSender(false)}
+          />
+        )}
+      </div>
+
+      {/* Chain info */}
+      {chainInfo && (
+        <div style={{ marginBottom:10, padding:"8px 12px", background:"#f0fdf4", border:"1px solid #bbf7d0", borderRadius:8, fontSize:12, color:"#15803d" }}>
+          {chainInfo}
+        </div>
+      )}
+
+      {/* Chain warning */}
+      {chainWarning && (
+        <div style={{ marginBottom:10, padding:"10px 14px", background:"#fefce8", border:"1px solid #fde68a", borderRadius:8, fontSize:12, color:"#92400e" }}>
+          {chainWarning}
+        </div>
+      )}
+
+      {/* Search */}
+      <div style={{ display:"flex", gap:10, marginBottom:16, flexWrap:"wrap", alignItems:"center" }}>
         <input
           type="text"
           placeholder="Search name, course, CID..."
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          style={{ width:240 }}
+          style={{ width:260, padding:"8px 12px", border:"1px solid #e2e8f0", borderRadius:8, fontSize:14 }}
         />
-        <button type="button" onClick={refresh} style={{ padding:"6px 12px", cursor:"pointer" }}>
-          🔄 Refresh
-        </button>
-        <button type="button" onClick={handleClearAll} style={{ color:"#b91c1c", padding:"6px 12px", cursor:"pointer" }}>
-          Clear All
-        </button>
-        <span style={{ fontSize:12, color:"#888" }}>
-          {filtered.length} certificate{filtered.length !== 1 ? "s" : ""}
-        </span>
+        {!loading && (
+          <span style={{ fontSize:13, color:"#64748b" }}>
+            {filtered.length} result{filtered.length!==1?"s":""}
+          </span>
+        )}
       </div>
 
-      {list.length === 0 && !error && (
-        <div style={{ padding:"40px 24px", textAlign:"center", background:"#f8fafc", borderRadius:12, border:"1px dashed #e2e8f0", color:"#94a3b8" }}>
-          <div style={{ fontSize:40, marginBottom:10 }}>🎓</div>
-          <div style={{ fontSize:15, fontWeight:600 }}>No certificates issued yet</div>
-          <div style={{ fontSize:13, marginTop:4 }}>Issue a certificate from Teacher – Single or 🤖 AI Generator tab</div>
+      {/* Loading */}
+      {loading && (
+        <div style={{ padding:"48px 24px", textAlign:"center", background:"#f8fafc", borderRadius:12, border:"1px solid #e2e8f0" }}>
+          <div style={{ fontSize:32, marginBottom:10 }}>⛓</div>
+          <div style={{ fontSize:15, fontWeight:600, color:"#1e3a5f" }}>Reading from blockchain...</div>
+          <div style={{ fontSize:13, color:"#64748b", marginTop:4 }}>Fetching CertificateAdded events</div>
         </div>
       )}
 
-      {filtered.length > 0 && (
+      {/* Empty */}
+      {!loading && certs.length === 0 && (
+        <div style={{ padding:"48px 24px", textAlign:"center", background:"#f8fafc", borderRadius:12, border:"1px dashed #e2e8f0" }}>
+          <div style={{ fontSize:40, marginBottom:10 }}>🎓</div>
+          <div style={{ fontSize:15, fontWeight:600, color:"#475569" }}>No certificates issued yet</div>
+          <div style={{ fontSize:13, color:"#94a3b8", marginTop:4 }}>Issue from Teacher – Single or 🤖 AI Generator</div>
+        </div>
+      )}
+
+      {/* Table */}
+      {!loading && filtered.length > 0 && (
         <div style={{ overflowX:"auto" }}>
           <table style={{ width:"100%", borderCollapse:"collapse", fontSize:"0.88rem" }}>
             <thead>
               <tr style={{ background:"#f8fafc" }}>
-                {["Preview","Student","Course","Certificate ID (Full)","Issued At","Status","QR / Print","Tx","Actions"].map((h) => (
-                  <th key={h} style={th}>{h}</th>
+                {["Preview","Student","Course","Certificate ID","Issued At","Status","QR / Print","Tx","Actions"].map(h => (
+                  <th key={h} style={{ textAlign:"left", padding:"9px 10px", borderBottom:"2px solid #e2e8f0", fontWeight:700, fontSize:"0.82rem", color:"#475569", whiteSpace:"nowrap" }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {filtered.map((rec) => {
-                if (!rec || !rec.cid) return null; // safety check
-                const cidToShow   = rec.imageCid || rec.cid;
-                const imgUrl      = cidToShow ? filebaseGatewayUrl(cidToShow) : "";
+                if (!rec?.cid) return null;
+                const imgUrl      = filebaseGatewayUrl(rec.imageCid || rec.cid);
                 const explorerUrl = rec.txHash ? `https://amoy.polygonscan.com/tx/${rec.txHash}` : "";
                 const isQROpen    = expandedQR === rec.cid;
                 const isCopied    = copiedCid === rec.cid;
+                const isLocal     = rec.source === "local";
 
                 return (
-                  <tr key={rec.cid} style={{ borderBottom:"1px solid #f1f5f9" }}>
+                  <tr key={rec.cid} style={{ borderBottom:"1px solid #f1f5f9", background: isLocal?"#fffbeb":"#fff" }}>
 
                     {/* Preview */}
-                    <td style={td}>
+                    <td style={{ padding:"8px 10px", verticalAlign:"top" }}>
                       {imgUrl && (
                         <img src={imgUrl} alt="cert"
                           style={{ width:64, height:64, objectFit:"cover", borderRadius:6, border:"1px solid #e2e8f0", display:"block" }}
-                          onError={(e) => { e.currentTarget.style.display = "none"; }}
+                          onError={(e) => { e.currentTarget.style.display="none"; }}
                         />
+                      )}
+                      {isLocal && (
+                        <span style={{ fontSize:9, color:"#92400e", display:"block", marginTop:3 }}>local</span>
                       )}
                     </td>
 
                     {/* Student */}
-                    <td style={{ ...td, fontWeight:600 }}>{rec.name || "—"}</td>
+                    <td style={{ padding:"8px 10px", verticalAlign:"top", fontWeight:600 }}>{rec.name}</td>
 
                     {/* Course */}
-                    <td style={td}>{rec.course || "—"}</td>
+                    <td style={{ padding:"8px 10px", verticalAlign:"top" }}>{rec.course}</td>
 
-                    {/* Full CID */}
-                    <td style={{ ...td, maxWidth:260 }}>
-                      <div style={{ fontFamily:"monospace", fontSize:11, color:"#334155", wordBreak:"break-all", lineHeight:1.5, background:"#f8fafc", border:"1px solid #e2e8f0", borderRadius:6, padding:"5px 8px", marginBottom:4 }}>
+                    {/* CID */}
+                    <td style={{ padding:"8px 10px", verticalAlign:"top", maxWidth:240 }}>
+                      <div style={{ fontFamily:"monospace", fontSize:10, color:"#334155", wordBreak:"break-all", lineHeight:1.5, background:"#f8fafc", border:"1px solid #e2e8f0", borderRadius:6, padding:"5px 8px", marginBottom:4 }}>
                         {rec.cid}
                       </div>
                       <button onClick={() => handleCopyCid(rec.cid)} style={{
                         fontSize:11, padding:"3px 10px", cursor:"pointer",
                         background: isCopied?"#f0fdf4":"#f8fafc",
-                        border: isCopied?"1px solid #bbf7d0":"1px solid #e2e8f0",
+                        border:`1px solid ${isCopied?"#bbf7d0":"#e2e8f0"}`,
                         borderRadius:5, color: isCopied?"#15803d":"#64748b", fontWeight:600,
                       }}>
-                        {isCopied ? "✅ Copied!" : "📋 Copy CID"}
+                        {isCopied ? "✅ Copied!" : "📋 Copy"}
                       </button>
                     </td>
 
                     {/* Issued At */}
-                    <td style={{ ...td, whiteSpace:"nowrap", fontSize:12 }}>
+                    <td style={{ padding:"8px 10px", verticalAlign:"top", whiteSpace:"nowrap", fontSize:12 }}>
                       {rec.issuedAt
                         ? new Date(rec.issuedAt * 1000).toLocaleDateString("en-GB", { day:"2-digit", month:"short", year:"numeric" })
                         : "—"
@@ -264,29 +418,28 @@ export default function IssuedTable() {
                     </td>
 
                     {/* Status */}
-                    <td style={td}>
+                    <td style={{ padding:"8px 10px", verticalAlign:"top" }}>
                       <span style={{
                         padding:"3px 10px", borderRadius:100, fontSize:12, fontWeight:600,
                         background: rec.revoked?"#fef2f2":"#f0fdf4",
                         color: rec.revoked?"#b91c1c":"#15803d",
-                        border: `1px solid ${rec.revoked?"#fecaca":"#bbf7d0"}`,
+                        border:`1px solid ${rec.revoked?"#fecaca":"#bbf7d0"}`,
                       }}>
                         {rec.revoked ? "Revoked" : "Active"}
                       </span>
                     </td>
 
                     {/* QR / Print */}
-                    <td style={{ ...td, textAlign:"center" }}>
+                    <td style={{ padding:"8px 10px", verticalAlign:"top", textAlign:"center" }}>
                       <div style={{ display:"flex", flexDirection:"column", gap:5, alignItems:"center" }}>
-                        <button onClick={() => setExpandedQR(isQROpen ? null : rec.cid)} style={{
+                        <button onClick={() => setExpandedQR(isQROpen?null:rec.cid)} style={{
                           padding:"4px 10px", fontSize:12, cursor:"pointer",
                           background: isQROpen?"#dbeafe":"#f0f9ff",
-                          border:"1px solid #93c5fd", borderRadius:6,
-                          color:"#1d4ed8", fontWeight:600,
+                          border:"1px solid #93c5fd", borderRadius:6, color:"#1d4ed8", fontWeight:600,
                         }}>
                           {isQROpen ? "Hide QR" : "Show QR"}
                         </button>
-                        <button onClick={() => handlePrintOne(rec)} style={{
+                        <button onClick={() => printCertificate(rec)} style={{
                           padding:"4px 10px", fontSize:12, cursor:"pointer",
                           background:"#fefce8", border:"1px solid #ca8a04",
                           borderRadius:6, color:"#92400e", fontWeight:600,
@@ -302,23 +455,26 @@ export default function IssuedTable() {
                     </td>
 
                     {/* Tx */}
-                    <td style={td}>
+                    <td style={{ padding:"8px 10px", verticalAlign:"top" }}>
                       {explorerUrl
                         ? <a href={explorerUrl} target="_blank" rel="noreferrer" style={{ color:"#2563eb", fontSize:12 }}>View Tx ↗</a>
                         : "—"
                       }
+                      {rec.blockNumber && (
+                        <div style={{ fontSize:10, color:"#94a3b8", marginTop:2 }}>Block #{rec.blockNumber}</div>
+                      )}
                     </td>
 
                     {/* Actions */}
-                    <td style={td}>
-                      <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
-                        <button onClick={() => handleRevokeToggle(rec)} style={{ fontSize:12, cursor:"pointer" }}>
-                          {rec.revoked ? "Restore" : "Revoke"}
-                        </button>
-                        <button onClick={() => handleRemove(rec)} style={{ fontSize:12, color:"#b91c1c", cursor:"pointer" }}>
-                          Remove
-                        </button>
-                      </div>
+                    <td style={{ padding:"8px 10px", verticalAlign:"top" }}>
+                      <button onClick={() => handleRevokeToggle(rec)} style={{
+                        fontSize:12, cursor:"pointer", padding:"4px 10px",
+                        background: rec.revoked?"#f0fdf4":"#fef2f2",
+                        border:`1px solid ${rec.revoked?"#bbf7d0":"#fecaca"}`,
+                        borderRadius:6, color: rec.revoked?"#15803d":"#b91c1c", fontWeight:600,
+                      }}>
+                        {rec.revoked ? "Restore" : "Revoke"}
+                      </button>
                     </td>
 
                   </tr>
@@ -328,9 +484,15 @@ export default function IssuedTable() {
           </table>
         </div>
       )}
+
+      {/* Footer */}
+      {!loading && certs.length > 0 && (
+        <div style={{ marginTop:14, padding:"10px 14px", background:"#f0f9ff", border:"1px solid #bae6fd", borderRadius:8, fontSize:12, color:"#0369a1" }}>
+          ⛓ {certs.filter(c=>c.source==="blockchain").length} from blockchain
+          {certs.filter(c=>c.source==="local").length > 0 && ` · 💾 ${certs.filter(c=>c.source==="local").length} from local cache`}
+          {" · "}Revocation is managed locally (off-chain)
+        </div>
+      )}
     </section>
   );
 }
-
-const th = { textAlign:"left", padding:"8px 10px", borderBottom:"2px solid #e2e8f0", whiteSpace:"nowrap", fontWeight:700, fontSize:"0.82rem", color:"#475569" };
-const td = { padding:"8px 10px", verticalAlign:"top" };

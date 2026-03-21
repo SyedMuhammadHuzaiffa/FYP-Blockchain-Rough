@@ -7,6 +7,7 @@ import { ethers } from "ethers";
 import { uploadToIpfsFilebase } from "./ipfsClient";
 import { pushIssued } from "./libs/store";
 import { resolveCertificate } from "./ethers-client";
+import EmailSender from "./EmailSender.jsx";
 
 // ─── Production-ready URL builder ────────────────────────────────────────────
 // Automatically works on localhost, WiFi, and Vercel — no manual config needed
@@ -297,6 +298,7 @@ export default function AIBulkIssuer() {
   const [phase, setPhase]       = useState("");
   const [issuing, setIssuing]   = useState(false);
   const [done, setDone]         = useState(false);
+  const [showEmailSender, setShowEmailSender] = useState(false);
 
   useEffect(() => {
     const l = document.createElement("link");
@@ -915,13 +917,33 @@ Sara Khan      | Web Dev Hackathon        | sara@email.com`}</pre>
                 ✅ Each certificate has a unique CID on IPFS (Pinata)<br />
                 ✅ All issued in ONE blockchain transaction<br />
                 ✅ QR code & TX hash printed on each certificate<br />
-                ✅ Saved to Admin – Issued tab<br />
-                ⏳ <strong>Next step:</strong> Send certificates to participants via email
+                ✅ Saved to Admin – Issued tab
               </div>
-              <button onClick={downloadZip} style={{ ...C.nextBtn, marginTop:14, background:"#15803d" }}>
-                ⬇ Download All Final Certificates (ZIP)
-              </button>
+              <div style={{ display:"flex", gap:10, marginTop:14, flexWrap:"wrap" }}>
+                <button onClick={downloadZip} style={{ ...C.nextBtn, background:"#15803d" }}>
+                  ⬇ Download All (ZIP)
+                </button>
+                <button
+                  onClick={() => setShowEmailSender(true)}
+                  style={{ ...C.nextBtn, background:"linear-gradient(135deg,#7c3aed,#6d28d9)" }}
+                >
+                  📧 Send Emails to Participants
+                </button>
+              </div>
             </div>
+          )}
+          {showEmailSender && (
+            <EmailSender
+              certificates={log.filter(l => l.status === "issued").map(l => ({
+                name:        l.name,
+                email:       l.email || "",
+                course:      l.competition,
+                competition: l.competition,
+                cid:         l.cid,
+                txHash:      l.txHash,
+              }))}
+              onClose={() => setShowEmailSender(false)}
+            />
           )}
         </div>
       )}
