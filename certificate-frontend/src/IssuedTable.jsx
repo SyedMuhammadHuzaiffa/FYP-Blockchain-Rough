@@ -4,7 +4,7 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { ethers } from "ethers";
 import { filebaseGatewayUrl } from "./ipfsClient";
-import { getBaseProvider } from "./ethers-client";
+// Uses public RPC — no MetaMask needed for reading
 import { getIssued, setRevoked, removeIssuedByCid, clearIssued } from "./libs/store";
 import registryMap from "./registry.json";
 import CertQRCode from "./QRCode.jsx";
@@ -20,11 +20,26 @@ const CERT_ABI = [
 // ─── Smart block range fetcher ────────────────────────────────────────────────
 // Tries progressively smaller ranges until RPC accepts
 async function fetchCertificatesFromChain() {
-  const { provider } = await getBaseProvider();
-  const network  = await provider.getNetwork();
-  const chainId  = Number(network.chainId);
+  // Use public RPC directly — no wallet needed
+  const PUBLIC_RPCS = [
+    "https://rpc-amoy.polygon.technology",
+    "https://polygon-amoy-bor-rpc.publicnode.com",
+    "https://polygon-amoy.drpc.org",
+    "https://rpc.ankr.com/polygon_amoy",
+  ];
+  let provider = null;
+  for (const url of PUBLIC_RPCS) {
+    try {
+      const p = new ethers.JsonRpcProvider(url, 80002);
+      await p.getBlockNumber();
+      provider = p;
+      break;
+    } catch { continue; }
+  }
+  if (!provider) throw new Error("All public RPCs failed.");
+  const chainId = "80002";
 
-  const regAddr = registryMap[String(chainId)];
+  const regAddr = registryMap[chainId];
   if (!regAddr) throw new Error(`No registry for chainId ${chainId}`);
 
   const registry = new ethers.Contract(regAddr, REGISTRY_ABI, provider);
