@@ -1,9 +1,7 @@
 // src/Single.jsx
 import React, { useState, useRef } from "react";
-import { ethers } from "ethers";
-import { resolveCertificate } from "./ethers-client";
+import { getContract } from "./ethers-client";
 import { pushIssued, cidExists } from "./libs/store";
-
 import { uploadToIpfsFilebase, filebaseGatewayUrl } from "./ipfsClient";
 import CertQRCode from "./QRCode";
 
@@ -95,7 +93,7 @@ function CertificateCard({ name, course, className, cid, issuedAt, txHash, image
           <script>
             // Generate QR inline using qrcode CDN for the print window
             (function() {
-              const verifyUrl = "${window.location.origin}${window.location.pathname}#verify?cid=${cid}";
+              const verifyUrl = "${window.location.origin}?tab=verify&cid=${encodeURIComponent(cid)}";
               const script = document.createElement("script");
               script.src = "https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js";
               script.onload = function() {
@@ -333,24 +331,13 @@ export default function Single() {
     if (!trimmedCid)    { setStatus("❗ Please upload the certificate image first."); return; }
     if (cidExists(trimmedCid)) { setStatus("❗ A certificate with this CID already exists."); return; }
 
-    let issuedTo = ethers.ZeroAddress;
-    if (trimmedWallet) {
-      if (!ethers.isAddress(trimmedWallet)) {
-        setStatus("❗ Invalid student wallet address.");
-        return;
-      }
-      issuedTo = trimmedWallet;
-    }
-
     try {
       setIssuing(true);
       setStatus("⏳ Connecting to MetaMask...");
-      const cert = await resolveCertificate();
+      const cert = await getContract();
 
       setStatus("⏳ Sending transaction — confirm in MetaMask...");
-      const tx = await cert.addCertificate(
-        trimmedName, trimmedCourse, trimmedClass || "", trimmedCid, issuedTo
-      );
+      const tx = await cert.issueCertificate(trimmedCid, trimmedName, trimmedCourse, GAS_SETTINGS);
 
       setStatus("⏳ Waiting for confirmation...");
       const receipt = await tx.wait();
