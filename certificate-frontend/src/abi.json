@@ -1,63 +1,131 @@
 [
-  {
-    "inputs": [],
-    "stateMutability": "nonpayable",
-    "type": "constructor"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      { "indexed": false, "internalType": "string", "name": "cid",         "type": "string"  },
-      { "indexed": false, "internalType": "string", "name": "name",        "type": "string"  },
-      { "indexed": false, "internalType": "string", "name": "competition", "type": "string"  },
-      { "indexed": false, "internalType": "uint256","name": "issuedAt",    "type": "uint256" }
-    ],
-    "name": "CertificateIssued",
-    "type": "event"
-  },
-  {
-    "inputs": [
-      { "internalType": "string", "name": "cid",         "type": "string" },
-      { "internalType": "string", "name": "name",        "type": "string" },
-      { "internalType": "string", "name": "competition", "type": "string" }
-    ],
-    "name": "issueCertificate",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      { "internalType": "string[]", "name": "cids",         "type": "string[]" },
-      { "internalType": "string[]", "name": "names",        "type": "string[]" },
-      { "internalType": "string[]", "name": "competitions", "type": "string[]" }
-    ],
-    "name": "issueBulk",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      { "internalType": "string", "name": "cid", "type": "string" }
-    ],
-    "name": "verify",
-    "outputs": [
-      { "internalType": "string",  "name": "name",        "type": "string"  },
-      { "internalType": "string",  "name": "competition", "type": "string"  },
-      { "internalType": "uint256", "name": "issuedAt",    "type": "uint256" },
-      { "internalType": "bool",    "name": "exists",      "type": "bool"    }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "owner",
-    "outputs": [
-      { "internalType": "address", "name": "", "type": "address" }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  }
+	{
+		"inputs": [],
+		"stateMutability": "nonpayable",
+		"type": "constructor"
+	},
+	{
+		"anonymous": false,
+		"inputs": [
+			{
+				"indexed": false,
+				"internalType": "string",
+				"name": "cid",
+				"type": "string"
+			},
+			{
+				"indexed": false,
+				"internalType": "string",
+				"name": "name",
+				"type": "string"
+			},
+			{
+				"indexed": false,
+				"internalType": "string",
+				"name": "competition",
+				"type": "string"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint256",
+				"name": "issuedAt",
+				"type": "uint256"
+			}
+		],
+		"name": "CertificateIssued",
+		"type": "event"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "string[]",
+				"name": "cids",
+				"type": "string[]"
+			},
+			{
+				"internalType": "string[]",
+				"name": "names",
+				"type": "string[]"
+			},
+			{
+				"internalType": "string[]",
+				"name": "competitions",
+				"type": "string[]"
+			}
+		],
+		"name": "issueBulk",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "string",
+				"name": "cid",
+				"type": "string"
+			},
+			{
+				"internalType": "string",
+				"name": "name",
+				"type": "string"
+			},
+			{
+				"internalType": "string",
+				"name": "competition",
+				"type": "string"
+			}
+		],
+		"name": "issueCertificate",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "owner",
+		"outputs": [
+			{
+				"internalType": "address",
+				"name": "",
+				"type": "address"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "string",
+				"name": "cid",
+				"type": "string"
+			}
+		],
+		"name": "verify",
+		"outputs": [
+			{
+				"internalType": "string",
+				"name": "name",
+				"type": "string"
+			},
+			{
+				"internalType": "string",
+				"name": "competition",
+				"type": "string"
+			},
+			{
+				"internalType": "uint256",
+				"name": "issuedAt",
+				"type": "uint256"
+			},
+			{
+				"internalType": "bool",
+				"name": "exists",
+				"type": "bool"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	}
 ]
