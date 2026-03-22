@@ -2,7 +2,8 @@
 import React, { useState, useRef } from "react";
 import { ethers } from "ethers";
 import { resolveCertificate } from "./ethers-client";
-import { pushIssued, cidExists } from "./store";
+import { pushIssued, cidExists } from "./libs/store";
+
 import { uploadToIpfsFilebase, filebaseGatewayUrl } from "./ipfsClient";
 import CertQRCode from "./QRCode";
 

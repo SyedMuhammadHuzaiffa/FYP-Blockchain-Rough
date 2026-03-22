@@ -3,8 +3,8 @@
 // npm install @emailjs/browser
 
 import React, { useState } from "react";
-import { sendBulkEmails, EMAILJS_CONFIG } from "./emailService";
-import { getIssued } from "./store";
+import { sendBulkEmails, EMAILJS_CONFIG } from "./libs/emailService";
+import { getIssued } from "./libs/store";
 
 // ─── Single email row in the send list ───────────────────────────────────────
 function RecipientRow({ rec, status }) {

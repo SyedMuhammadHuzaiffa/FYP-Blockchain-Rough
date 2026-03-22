@@ -5,7 +5,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { ethers } from "ethers";
 import { uploadToIpfsFilebase } from "./ipfsClient";
-import { pushIssued } from "./store";
+import { pushIssued } from "./libs/store";
 import { resolveCertificate } from "./ethers-client";
 import EmailSender from "./EmailSender.jsx";
 
