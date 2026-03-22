@@ -1,6 +1,6 @@
 // src/Single.jsx
 import React, { useState, useRef } from "react";
-import { getContract } from "./ethers-client";
+import { getContract, GAS_SETTINGS } from "./ethers-client";
 import { pushIssued, cidExists } from "./libs/store";
 import { uploadToIpfsFilebase, filebaseGatewayUrl } from "./ipfsClient";
 import CertQRCode from "./QRCode";
