@@ -7,7 +7,7 @@ import { ethers } from "ethers";
 import { uploadToIpfsFilebase } from "./ipfsClient";
 import { pushIssued } from "./libs/store";
 import { resolveCertificate } from "./ethers-client";
-import EmailSender from "./EmailSender.jsx";
+import EmailSender from ".EmailSender.jsx";
 
 // ─── Production-ready URL builder ────────────────────────────────────────────
 // Automatically works on localhost, WiFi, and Vercel — no manual config needed
@@ -476,20 +476,23 @@ export default function AIBulkIssuer() {
         const file = new File([blob], `cert-final-${u.name.replace(/\s+/g,"-")}.png`, { type:"image/png" });
         const finalCid = await uploadToIpfsFilebase(file);
 
-        // Save to local store
+        // ✅ KEY FIX:
+        // u.cid   = original CID stored ON BLOCKCHAIN (Phase 1) → use for verify
+        // finalCid = re-rendered cert with QR printed → use only for display/image
+        // Email and QR must always use u.cid (blockchain CID), NOT finalCid
         pushIssued({
-          cid: finalCid,
-          name: u.name,
-          course: u.competition,
+          cid:      u.cid,       // ← blockchain CID (for verification)
+          name:     u.name,
+          course:   u.competition,
           className: "",
-          imageCid: finalCid,
+          imageCid: finalCid,    // ← final image CID (for display only)
           txHash,
           issuedAt: nowSec,
-          revoked: false,
-          email: u.email,
+          revoked:  false,
+          email:    u.email,
         });
 
-        entries[u.index] = { ...entries[u.index], status: "issued", finalDataUrl, cid: finalCid, txHash };
+        entries[u.index] = { ...entries[u.index], status: "issued", finalDataUrl, cid: u.cid, imageCid: finalCid, txHash };
         setLog([...entries]);
       } catch (err) {
         entries[u.index] = { ...entries[u.index], status: "finalize_failed", error: err?.message };

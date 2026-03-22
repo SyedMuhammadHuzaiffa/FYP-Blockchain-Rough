@@ -8,7 +8,7 @@ import { filebaseGatewayUrl } from "./ipfsClient";
 import { getIssued, setRevoked, removeIssuedByCid, clearIssued } from "./libs/store";
 import registryMap from "./registry.json";
 import CertQRCode from "./QRCode.jsx";
-import EmailSender from "./EmailSender.jsx";
+import EmailSender from ".EmailSender.jsx";
 
 const REGISTRY_ABI = [
   "function getAddressByString(string keyStr) view returns (address)"
