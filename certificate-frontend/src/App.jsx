@@ -5,6 +5,7 @@ import Bulk from "./Bulk.tsx";
 import Verify from "./Verify.jsx";
 import IssuedTable from "./IssuedTable.jsx";
 import AIBulkIssuer from "./AIBulkIssuer.jsx";
+import MerkleBulkIssuer from "./MerkleBulkIssuer.jsx";
 import "./App.css";
 
 export default function App() {
@@ -36,19 +37,22 @@ export default function App() {
       </header>
 
       <nav className="tabs">
-        <button className={`tab ${tab === "single"   ? "active" : ""}`} onClick={() => setTab("single")}>
+        <button className={`tab ${tab === "single"  ? "active" : ""}`} onClick={() => setTab("single")}>
           Teacher – Single
         </button>
-        <button className={`tab ${tab === "bulk"     ? "active" : ""}`} onClick={() => setTab("bulk")}>
+        <button className={`tab ${tab === "bulk"    ? "active" : ""}`} onClick={() => setTab("bulk")}>
           Teacher – Bulk
         </button>
-        <button className={`tab ${tab === "ai-bulk"  ? "active" : ""}`} onClick={() => setTab("ai-bulk")}>
+        <button className={`tab ${tab === "ai-bulk" ? "active" : ""}`} onClick={() => setTab("ai-bulk")}>
           🤖 AI Generator
         </button>
-        <button className={`tab ${tab === "verify"   ? "active" : ""}`} onClick={() => setTab("verify")}>
+        <button className={`tab ${tab === "merkle"  ? "active" : ""}`} onClick={() => setTab("merkle")}>
+          🌲 Merkle Bulk
+        </button>
+        <button className={`tab ${tab === "verify"  ? "active" : ""}`} onClick={() => setTab("verify")}>
           Student – Verify
         </button>
-        <button className={`tab ${tab === "issued"   ? "active" : ""}`} onClick={() => setTab("issued")}>
+        <button className={`tab ${tab === "issued"  ? "active" : ""}`} onClick={() => setTab("issued")}>
           Admin – Issued
         </button>
       </nav>
@@ -56,6 +60,7 @@ export default function App() {
       {tab === "single"  && <Single />}
       {tab === "bulk"    && <Bulk />}
       {tab === "ai-bulk" && <AIBulkIssuer />}
+      {tab === "merkle"  && <MerkleBulkIssuer />}
       {tab === "verify"  && <Verify initialCid={deepLinkCid} onCidUsed={() => setDeepLinkCid("")} />}
       {tab === "issued"  && <IssuedTable />}
     </div>
