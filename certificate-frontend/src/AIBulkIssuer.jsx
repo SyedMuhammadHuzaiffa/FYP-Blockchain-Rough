@@ -999,40 +999,34 @@ export default function AIBulkIssuer() {
             </div>
           )}
 
-          // In AIBulkIssuer.jsx — find this block near the bottom (the showEmailSender section)
-// and replace the certificates= prop with this version that passes merkleData:
-
-{showEmailSender && (
-  <EmailSender
-    certificates={log.filter(l => l.status === "issued").map(l => {
-      // Find this cert's proof from localStorage
-      const batches = JSON.parse(localStorage.getItem("merkle_batches") || "[]");
-      const batch   = batches.find(b => b.batchId === l.batchId);
-      const cert    = batch?.certs?.find(c => c.cid === l.cid);
-
-      return {
-        name:        l.name,
-        email:       l.email || "",
-        course:      l.competition,
-        competition: l.competition,
-        cid:         l.cid,
-        txHash:      l.txHash,
-        // Pass merkleData so email link includes proof — works on any device
-        merkleData: cert ? {
-          batchId:     l.batchId,
-          name:        l.name,
-          competition: l.competition,
-          proof:       cert.proof,
-          root:        batch.root,
-          txHash:      l.txHash,
-          issuedAt:    batch.issuedAt,
-          batchDesc:   batch.description,
-        } : null,
-      };
-    })}
-    onClose={() => setShowEmailSender(false)}
-  />
-)}
+          {showEmailSender && (
+            <EmailSender
+              certificates={log.filter(l => l.status === "issued").map(l => {
+                const batches = JSON.parse(localStorage.getItem("merkle_batches") || "[]");
+                const batch   = batches.find(b => b.batchId === l.batchId);
+                const cert    = batch?.certs?.find(c => c.cid === l.cid);
+                return {
+                  name:        l.name,
+                  email:       l.email || "",
+                  course:      l.competition,
+                  competition: l.competition,
+                  cid:         l.cid,
+                  txHash:      l.txHash,
+                  merkleData: cert ? {
+                    batchId:     l.batchId,
+                    name:        l.name,
+                    competition: l.competition,
+                    proof:       cert.proof,
+                    root:        batch.root,
+                    txHash:      l.txHash,
+                    issuedAt:    batch.issuedAt,
+                    batchDesc:   batch.description,
+                  } : null,
+                };
+              })}
+              onClose={() => setShowEmailSender(false)}
+            />
+          )}
         </div>
       )}
     </div>
