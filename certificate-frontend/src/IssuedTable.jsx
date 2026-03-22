@@ -5,10 +5,10 @@ import React, { useEffect, useState, useCallback } from "react";
 import { ethers } from "ethers";
 import { filebaseGatewayUrl } from "./ipfsClient";
 // Uses public RPC — no MetaMask needed for reading
-import { getIssued, setRevoked, removeIssuedByCid, clearIssued } from "./libs/store";
+import { getIssued, setRevoked, removeIssuedByCid, clearIssued } from "./store";
 import registryMap from "./registry.json";
 import CertQRCode from "./QRCode.jsx";
-import EmailSender from ".EmailSender.jsx";
+import EmailSender from "./EmailSender.jsx";
 
 const REGISTRY_ABI = [
   "function getAddressByString(string keyStr) view returns (address)"

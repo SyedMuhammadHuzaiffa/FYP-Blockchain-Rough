@@ -4,7 +4,7 @@
 
 import React, { useState } from "react";
 import { sendBulkEmails, EMAILJS_CONFIG } from "./emailService";
-import { getIssued } from "./libs/store";
+import { getIssued } from "./store";
 
 // ─── Single email row in the send list ───────────────────────────────────────
 function RecipientRow({ rec, status }) {

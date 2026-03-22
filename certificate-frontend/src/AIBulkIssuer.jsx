@@ -5,9 +5,9 @@
 import React, { useState, useRef, useEffect } from "react";
 import { ethers } from "ethers";
 import { uploadToIpfsFilebase } from "./ipfsClient";
-import { pushIssued } from "./libs/store";
+import { pushIssued } from "./store";
 import { resolveCertificate } from "./ethers-client";
-import EmailSender from ".EmailSender.jsx";
+import EmailSender from "./EmailSender.jsx";
 
 // ─── Production-ready URL builder ────────────────────────────────────────────
 // Automatically works on localhost, WiFi, and Vercel — no manual config needed
