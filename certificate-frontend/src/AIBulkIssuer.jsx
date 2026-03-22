@@ -6,7 +6,7 @@ import React, { useState, useRef, useEffect } from "react";
 import { ethers } from "ethers";
 import { uploadToIpfsFilebase } from "./ipfsClient";
 import { pushIssued } from "./libs/store";
-import { resolveCertificate } from "./ethers-client";
+import { getContract, GAS_SETTINGS } from "./ethers-client";
 import EmailSender from "./EmailSender.jsx";
 
 // ─── Production-ready URL builder ────────────────────────────────────────────
@@ -424,13 +424,13 @@ export default function AIBulkIssuer() {
     let txHash = "";
     let nowSec = 0;
     try {
-      const cert = await resolveCertificate();
-      const tx = await cert.addCertificates(
+      const cert = await getContract();
+      // ✅ New contract: issueBulk(cids[], names[], competitions[])
+      const tx = await cert.issueBulk(
+        uploaded.map(u => u.cid),
         uploaded.map(u => u.name),
         uploaded.map(u => u.competition),
-        uploaded.map(() => ""),
-        uploaded.map(u => u.cid),
-        uploaded.map(() => ethers.ZeroAddress)
+        GAS_SETTINGS
       );
       setIS("⏳ Phase 2/3 — Waiting for blockchain confirmation...");
       const receipt = await tx.wait();
