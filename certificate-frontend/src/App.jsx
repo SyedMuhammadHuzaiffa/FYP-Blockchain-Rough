@@ -13,19 +13,26 @@ export default function App() {
     const params = new URLSearchParams(window.location.search);
     const tabParam = params.get("tab");
     const cidParam = params.get("cid");
+    const mpParam  = params.get("mp");  // Merkle proof payload
     return {
       tab: tabParam === "verify" ? "verify" : "single",
       cid: cidParam || "",
+      mp:  mpParam  || "",
     };
   }
 
   const initial = getInitialState();
-  const [tab, setTab] = useState(initial.tab);
+  const [tab, setTab]                 = useState(initial.tab);
   const [deepLinkCid, setDeepLinkCid] = useState(initial.cid);
+  const [deepLinkMp,  setDeepLinkMp]  = useState(initial.mp);
 
   useEffect(() => {
+    // Delay clearing the URL so Verify.jsx has time to read ?mp= on mount
     if (initial.tab === "verify" || initial.cid) {
-      window.history.replaceState({}, "", window.location.pathname);
+      const timer = setTimeout(() => {
+        window.history.replaceState({}, "", window.location.pathname);
+      }, 3000);
+      return () => clearTimeout(timer);
     }
   }, []);
 
@@ -61,7 +68,13 @@ export default function App() {
       {tab === "bulk"    && <Bulk />}
       {tab === "ai-bulk" && <AIBulkIssuer />}
       {tab === "merkle"  && <MerkleBulkIssuer />}
-      {tab === "verify"  && <Verify initialCid={deepLinkCid} onCidUsed={() => setDeepLinkCid("")} />}
+      {tab === "verify"  && (
+        <Verify
+          initialCid={deepLinkCid}
+          initialMp={deepLinkMp}
+          onCidUsed={() => { setDeepLinkCid(""); setDeepLinkMp(""); }}
+        />
+      )}
       {tab === "issued"  && <IssuedTable />}
     </div>
   );

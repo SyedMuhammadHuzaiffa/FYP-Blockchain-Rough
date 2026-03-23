@@ -3,7 +3,8 @@
 // Checks BOTH contracts:
 //   1. Certificate.sol  — Single/Bulk tab certs
 //   2. MerkleCertificate.sol — AI Generator certs
-//      Proof comes from ?mp= URL param (any device) OR localStorage (same device)
+//      Proof comes from initialMp prop (passed by App.jsx from ?mp= URL param)
+//      OR from localStorage (same device fallback)
 
 import React, { useState, useEffect, useRef } from "react";
 import { ethers } from "ethers";
@@ -35,7 +36,6 @@ async function getProvider() {
   throw new Error("All public RPCs failed. Check internet connection.");
 }
 
-// ─── Step 1: old Certificate.sol ─────────────────────────────────────────────
 async function checkOldContract(cid) {
   const provider = await getProvider();
   const contract = new ethers.Contract(OLD_CONTRACT, OLD_ABI, provider);
@@ -51,17 +51,15 @@ async function checkOldContract(cid) {
   };
 }
 
-// ─── Step 2A: Merkle proof from URL param ?mp= — works on ANY device ──────────
-function getMerkleDataFromUrl() {
+// Parse merkle data from the prop (already read from URL by App.jsx)
+function parseMpProp(mpString) {
+  if (!mpString) return null;
   try {
-    const params = new URLSearchParams(window.location.search);
-    const mp = params.get("mp");
-    if (!mp) return null;
-    return JSON.parse(decodeURIComponent(mp));
+    return JSON.parse(decodeURIComponent(mpString));
   } catch { return null; }
 }
 
-// ─── Step 2B: Merkle proof from localStorage — same device only ───────────────
+// Fallback: check localStorage (same device only)
 function getMerkleDataFromStorage(cid) {
   try {
     const batches = JSON.parse(localStorage.getItem("merkle_batches") || "[]");
@@ -82,15 +80,12 @@ function getMerkleDataFromStorage(cid) {
   return null;
 }
 
-// ─── Step 2: verify Merkle cert ───────────────────────────────────────────────
 async function verifyMerkleData(cid, data) {
   if (!data) return null;
 
-  // Local proof check — instant
   const localValid = verifyLocally(data.root, cid, data.name, data.competition, data.proof);
   if (!localValid) return null;
 
-  // On-chain check — free view call
   try {
     const provider = await getProvider();
     const contract = new ethers.Contract(MERKLE_ADDRESS, MERKLE_ABI, provider);
@@ -128,8 +123,7 @@ async function verifyMerkleData(cid, data) {
   }
 }
 
-// ─── Main: check both contracts ───────────────────────────────────────────────
-async function verifyAnywhere(cid, setStep) {
+async function verifyAnywhere(cid, merkleDataFromUrl, setStep) {
   const cleanCid = decodeURIComponent(cid.trim());
 
   setStep("Checking Certificate.sol...");
@@ -137,7 +131,8 @@ async function verifyAnywhere(cid, setStep) {
   if (oldResult) return oldResult;
 
   setStep("Checking Merkle proof...");
-  const merkleData = getMerkleDataFromUrl() || getMerkleDataFromStorage(cleanCid);
+  // Prefer data passed directly from App.jsx (from URL), then fall back to localStorage
+  const merkleData = merkleDataFromUrl || getMerkleDataFromStorage(cleanCid);
   if (merkleData) {
     const result = await verifyMerkleData(cleanCid, merkleData);
     if (result) return result;
@@ -334,7 +329,8 @@ function NotFoundCard({ cid }) {
 }
 
 // ─── Main Verify Component ────────────────────────────────────────────────────
-export default function Verify({ initialCid, onCidUsed }) {
+// Now accepts initialMp prop from App.jsx (read from URL before it gets wiped)
+export default function Verify({ initialCid, initialMp, onCidUsed }) {
   const [inputCid, setInputCid]       = useState("");
   const [result, setResult]           = useState(null);
   const [notFound, setNotFound]       = useState(false);
@@ -345,16 +341,27 @@ export default function Verify({ initialCid, onCidUsed }) {
   const [showScanner, setShowScanner] = useState(false);
   const [scanned, setScanned]         = useState(false);
 
+  // Store merkle data from URL so it persists after URL is wiped
+  const merkleDataRef = useRef(null);
+
   useEffect(() => {
     if (initialCid && initialCid.trim()) {
       const decoded = decodeURIComponent(initialCid.trim());
       setInputCid(decoded);
-      runVerify(decoded);
+
+      // Parse merkle data from prop BEFORE it gets cleared
+      if (initialMp) {
+        try {
+          merkleDataRef.current = JSON.parse(decodeURIComponent(initialMp));
+        } catch { merkleDataRef.current = null; }
+      }
+
+      runVerify(decoded, merkleDataRef.current);
       if (onCidUsed) onCidUsed();
     }
-  }, [initialCid]);
+  }, [initialCid, initialMp]);
 
-  async function runVerify(cid) {
+  async function runVerify(cid, merkleDataOverride) {
     const trimmed = decodeURIComponent((cid || "").trim());
     if (!trimmed) { setError("Please enter a Certificate ID."); return; }
     setVerifying(true);
@@ -362,8 +369,14 @@ export default function Verify({ initialCid, onCidUsed }) {
     setNotFound(false);
     setError("");
     setVerifiedCid("");
+
+    // Use passed-in merkle data, or what was stored from the URL prop
+    const merkleData = merkleDataOverride !== undefined
+      ? merkleDataOverride
+      : merkleDataRef.current;
+
     try {
-      const data = await verifyAnywhere(trimmed, setVerifyStep);
+      const data = await verifyAnywhere(trimmed, merkleData, setVerifyStep);
       setVerifiedCid(trimmed);
       if (data.exists) setResult(data);
       else setNotFound(true);
@@ -375,12 +388,18 @@ export default function Verify({ initialCid, onCidUsed }) {
     }
   }
 
+  function handleManualVerify(cid) {
+    // Manual search — no merkle data from URL, only localStorage fallback
+    merkleDataRef.current = null;
+    runVerify(cid, null);
+  }
+
   function handleQRResult(cid) {
     setShowScanner(false);
     setScanned(true);
     const decoded = decodeURIComponent(cid);
     setInputCid(decoded);
-    runVerify(decoded);
+    handleManualVerify(decoded);
     setTimeout(() => setScanned(false), 3000);
   }
 
@@ -397,12 +416,12 @@ export default function Verify({ initialCid, onCidUsed }) {
         </h2>
         <p style={{ maxWidth:520, margin:"0 auto", color:"#64748b", fontSize:14, lineHeight:1.7 }}>
           Checks both <strong>Certificate.sol</strong> and <strong>Merkle batch contracts</strong>.<br />
-          No wallet or MetaMask needed — works for everyone.
+          <span style={{ color:"#22c55e", fontWeight:600 }}>✅ No wallet or MetaMask needed — works for everyone</span>
         </p>
       </div>
 
       <div style={{ maxWidth:720, margin:"0 auto", padding:"0 16px" }}>
-        <form onSubmit={e => { e.preventDefault(); runVerify(inputCid); }}>
+        <form onSubmit={e => { e.preventDefault(); handleManualVerify(inputCid); }}>
           <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
             <div style={{ flex:1, position:"relative", minWidth:200 }}>
               <span style={{ position:"absolute", left:12, top:"50%", transform:"translateY(-50%)", fontSize:15, pointerEvents:"none" }}>🔍</span>
@@ -421,12 +440,12 @@ export default function Verify({ initialCid, onCidUsed }) {
             </button>
             <button type="button" onClick={() => setShowScanner(true)}
               style={{ padding:"13px 18px", background:"#f0f9ff", border:"1px solid #7dd3fc", borderRadius:10, color:"#0369a1", fontWeight:600, fontSize:14, cursor:"pointer", whiteSpace:"nowrap" }}>
-              Scan QR
+              📷 Scan QR
             </button>
           </div>
         </form>
 
-        {scanned && <div style={{ marginTop:10, display:"inline-block", padding:"5px 14px", background:"#f0fdf4", border:"1px solid #bbf7d0", borderRadius:100, color:"#15803d", fontSize:13 }}>QR scanned</div>}
+        {scanned && <div style={{ marginTop:10, display:"inline-block", padding:"5px 14px", background:"#f0fdf4", border:"1px solid #bbf7d0", borderRadius:100, color:"#15803d", fontSize:13 }}>✅ QR scanned</div>}
 
         {verifying && (
           <div style={{ marginTop:20, textAlign:"center", padding:"24px", background:"#f8fafc", borderRadius:10, border:"1px solid #e2e8f0" }}>
@@ -462,8 +481,8 @@ export default function Verify({ initialCid, onCidUsed }) {
           <div style={{ marginTop:32, display:"flex", gap:10, flexWrap:"wrap", justifyContent:"center" }}>
             {[
               { n:"1", text:"Get the full link from your email" },
-              { n:"2", text:"Click the link OR paste the CID" },
-              { n:"3", text:"Instant verification, any device" },
+              { n:"2", text:"Click the link — proof is embedded automatically" },
+              { n:"3", text:"Instant verification on any device" },
             ].map(({ n, text }) => (
               <div key={n} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 14px", background:"#f8fafc", border:"1px solid #e2e8f0", borderRadius:10 }}>
                 <span style={{ width:22, height:22, borderRadius:"50%", background:"rgba(59,130,246,0.15)", color:"#3b82f6", fontSize:12, fontWeight:700, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>{n}</span>
