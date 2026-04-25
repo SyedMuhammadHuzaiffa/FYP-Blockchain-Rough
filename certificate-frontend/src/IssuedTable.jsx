@@ -10,7 +10,6 @@ import EmailSender from "./EmailSender.jsx";
 
 // ─── New contract address & ABI ───────────────────────────────────────────────
 const CONTRACT_ADDRESS = "0xd274A64A924491032ADf7A12E58Bd4662Fd36E69";
-
 const CERT_ABI = [
   "event CertificateIssued(string cid, string name, string competition, uint256 issuedAt)"
 ];

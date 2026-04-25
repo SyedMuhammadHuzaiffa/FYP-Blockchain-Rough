@@ -18,7 +18,6 @@ const MERKLE_ABI = [
 
 // ─── UPDATE THIS after deploying MerkleCertificate.sol ────────────────────────
 const MERKLE_CONTRACT_ADDRESS = "0xa9e704750FdF85D168965db823728199840EC840";
-
 const GAS_SETTINGS = {
   maxPriorityFeePerGas: ethers.parseUnits("30", "gwei"),
   maxFeePerGas:         ethers.parseUnits("60", "gwei"),

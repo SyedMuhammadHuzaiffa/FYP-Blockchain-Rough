@@ -4,9 +4,8 @@ import ABI from "./abi.json";
 
 // ─── NEW Contract address — update after deployment ───────────────────────────
 const CONTRACT_ADDRESSES = {
-  "80002": "0xd274A64A924491032ADf7A12E58Bd4662Fd36E69",
-};
-
+  "80002": "0x43ccccc0850B169D67915BE5951a7be0C4D5a975",
+}
 // ─── Get signer (MetaMask) ────────────────────────────────────────────────────
 export async function getSigner() {
   if (!window.ethereum) throw new Error("MetaMask not found.");

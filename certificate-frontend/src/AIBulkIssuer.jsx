@@ -15,7 +15,6 @@ import MERKLE_ABI from "./merkle-abi.json";
 
 // ─── Merkle Contract ──────────────────────────────────────────────────────────
 const MERKLE_ADDRESS = "0xa9e704750FdF85D168965db823728199840EC840";
-
 async function getMerkleContract() {
   if (!window.ethereum) throw new Error("MetaMask not found");
   const provider = new ethers.BrowserProvider(window.ethereum);

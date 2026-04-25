@@ -11,7 +11,6 @@ import { ethers } from "ethers";
 import { filebaseGatewayUrl } from "./ipfsClient";
 import MERKLE_ABI from "./merkle-abi.json";
 import { verifyLocally } from "./libs/merkleUtils";
-
 const OLD_CONTRACT   = "0xd274A64A924491032ADf7A12E58Bd4662Fd36E69";
 const MERKLE_ADDRESS = "0xa9e704750FdF85D168965db823728199840EC840";
 
