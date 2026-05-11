@@ -1,5 +1,7 @@
 import { useState } from "react";
-import { registerUser } from "../auth";
+import { createUserWithEmailAndPassword } from "firebase/auth";
+import { doc, setDoc } from "firebase/firestore";
+import { auth, db } from "../firebase";
 import { useNavigate } from "react-router-dom";
 
 export default function Register() {
@@ -10,22 +12,36 @@ export default function Register() {
 
   const handleRegister = async () => {
     try {
-      // Default role = student
-      await registerUser(email, password, "student");
+      const userCred = await createUserWithEmailAndPassword(
+        auth,
+        email,
+        password,
+      );
 
-      alert("Student Registered!");
+      const user = userCred.user;
+
+      // ALL SELF-REGISTERED USERS = STUDENTS
+      await setDoc(doc(db, "users", user.uid), {
+        uid: user.uid,
+        email,
+        role: "student",
+        createdAt: new Date(),
+      });
+
+      alert("User registered successfully");
+
       navigate("/login");
     } catch (err) {
+      console.log(err);
       alert(err.message);
     }
   };
 
   return (
     <div style={{ padding: 20 }}>
-      <h2>Register</h2>
+      <h1>Register</h1>
 
       <input placeholder="Email" onChange={(e) => setEmail(e.target.value)} />
-
       <br />
 
       <input
@@ -33,7 +49,6 @@ export default function Register() {
         type="password"
         onChange={(e) => setPassword(e.target.value)}
       />
-
       <br />
 
       <button onClick={handleRegister}>Register</button>
