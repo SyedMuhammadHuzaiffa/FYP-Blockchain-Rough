@@ -6,6 +6,7 @@ import { collection, doc, getDoc, getDocs, query, where } from "firebase/firesto
 import Navbar from "../components/Navbar";
 import { db } from "../firebase";
 import { generateCertificatePdf } from "../utils/certificatePdf";
+import { shareCertificate } from "../utils/shareCertificate";
 import { useToast } from "../components/toastContext";
 
 function formatValue(value) {
@@ -296,6 +297,22 @@ export default function StudentDashboard({ user, role }) {
     }
   };
 
+  const handleShareCertificate = async (certificate) => {
+    try {
+      const result = await shareCertificate(certificate);
+
+      if (result === "shared") {
+        toast.success("Certificate shared.");
+        return;
+      }
+
+      toast.info("Sharing is not available here, so the certificate details were copied.");
+    } catch (err) {
+      console.error(err);
+      toast.error("Could not share this certificate. Please try again.");
+    }
+  };
+
   const qrCertificateId = getCertificateIdentifier(qrCertificate);
   const qrVerifyLink = qrCertificateId ? getVerifyLink(qrCertificateId) : "";
 
@@ -499,6 +516,13 @@ export default function StudentDashboard({ user, role }) {
                               className="button button-outline button-small"
                             >
                               Show QR
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleShareCertificate(certificate)}
+                              className="button button-outline button-small"
+                            >
+                              Share
                             </button>
                             <button
                               type="button"

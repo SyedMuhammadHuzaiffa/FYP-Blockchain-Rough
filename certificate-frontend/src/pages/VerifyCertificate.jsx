@@ -10,6 +10,7 @@ import {
 } from "../blockchain/verifyCertificateOnChain";
 import { ThemeToggle } from "../components/ThemeProvider";
 import { generateCertificatePdf } from "../utils/certificatePdf";
+import { shareCertificate } from "../utils/shareCertificate";
 import { useToast } from "../components/toastContext";
 
 const AMOY_TX_BASE_URL = "https://amoy.polygonscan.com/tx/";
@@ -447,6 +448,44 @@ export default function VerifyCertificate() {
     }
   };
 
+  const handleShareCertificate = async ({
+    blockchainResult,
+    hashMatch,
+    isRevoked,
+  }) => {
+    const currentCertificateId = certificate?.certificateId || certificate?.id;
+
+    if (!currentCertificateId) {
+      toast.error("This certificate is missing an ID, so it cannot be shared.");
+      return;
+    }
+
+    try {
+      const result = await shareCertificate({
+        ...certificate,
+        certificateId: currentCertificateId,
+        organizationName: organizationName || getFallbackOrganizationName(certificate),
+        blockchainShareStatus: [
+          blockchainResult,
+          hashMatch === false ? "hash mismatch" : "",
+          isRevoked ? "revoked" : "",
+        ]
+          .filter(Boolean)
+          .join(", "),
+      });
+
+      if (result === "shared") {
+        toast.success("Certificate shared.");
+        return;
+      }
+
+      toast.info("Sharing is not available here, so the certificate details were copied.");
+    } catch (err) {
+      console.error(err);
+      toast.error("Could not share this certificate. Please try again.");
+    }
+  };
+
   const renderPublicShell = (children) => (
     <main className="public-shell">
       <div className="public-topbar">
@@ -621,21 +660,36 @@ export default function VerifyCertificate() {
         <p className="muted">
           Certificate ID: {certificate?.certificateId || certificate?.id}
         </p>
-        {canDownloadCertificate ? (
+        {certificate?.certificateId || certificate?.id ? (
           <div className="button-row" style={{ marginTop: 18 }}>
+            {canDownloadCertificate ? (
+              <button
+                type="button"
+                onClick={() =>
+                  downloadCertificate({
+                    blockchainResult,
+                    hashMatch,
+                    isRevoked,
+                  })
+                }
+                disabled={pdfLoading}
+                className="button button-tonal"
+              >
+                {pdfLoading ? "Generating PDF..." : "Download Certificate PDF"}
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() =>
-                downloadCertificate({
+                handleShareCertificate({
                   blockchainResult,
                   hashMatch,
                   isRevoked,
                 })
               }
-              disabled={pdfLoading}
-              className="button button-tonal"
+              className="button button-outline"
             >
-              {pdfLoading ? "Generating PDF..." : "Download Certificate PDF"}
+              Share Certificate
             </button>
           </div>
         ) : null}

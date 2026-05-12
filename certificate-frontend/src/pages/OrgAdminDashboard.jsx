@@ -6,6 +6,7 @@ import { httpsCallable } from "firebase/functions";
 import { db, functions } from "../firebase";
 import AppLayout from "../components/AppLayout";
 import { generateCertificatePdf } from "../utils/certificatePdf";
+import { shareCertificate } from "../utils/shareCertificate";
 import { useToast } from "../components/toastContext";
 
 const emptyTeacherForm = {
@@ -226,6 +227,7 @@ function CertificateTable({
   onDownload,
   onOpenQr,
   onRevoke,
+  onShare,
 }) {
   return (
     <section className="card">
@@ -358,6 +360,22 @@ function CertificateTable({
                           className="button button-outline button-small"
                         >
                           QR
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onShare({
+                              ...certificate,
+                              organizationName:
+                                certificate.organizationName ||
+                                organizationName ||
+                                certificate.organizationId ||
+                                "",
+                            })
+                          }
+                          className="button button-outline button-small"
+                        >
+                          Share
                         </button>
                         <button
                           type="button"
@@ -641,6 +659,37 @@ export default function OrgAdminDashboard({ user }) {
       toast.error("Could not generate the certificate PDF. Please try again.");
     } finally {
       setDownloadingCertificateId("");
+    }
+  };
+
+  const handleShareCertificate = async (certificate) => {
+    const currentCertificateId = getCertificateIdentifier(certificate);
+
+    if (!currentCertificateId) {
+      toast.error("Certificate ID is missing.");
+      return;
+    }
+
+    try {
+      const result = await shareCertificate({
+        ...certificate,
+        certificateId: currentCertificateId,
+        organizationName:
+          certificate.organizationName ||
+          organizationName ||
+          certificate.organizationId ||
+          "",
+      });
+
+      if (result === "shared") {
+        toast.success("Certificate shared.");
+        return;
+      }
+
+      toast.info("Sharing is not available here, so the certificate details were copied.");
+    } catch (err) {
+      console.error(err);
+      toast.error("Could not share this certificate. Please try again.");
     }
   };
 
@@ -1101,6 +1150,7 @@ export default function OrgAdminDashboard({ user }) {
               onDownload={downloadCertificate}
               onOpenQr={setQrCertificate}
               onRevoke={revokeCertificate}
+              onShare={handleShareCertificate}
             />
           </>
         ) : null}
