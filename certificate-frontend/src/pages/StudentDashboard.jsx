@@ -6,6 +6,7 @@ import { collection, doc, getDoc, getDocs, query, where } from "firebase/firesto
 import Navbar from "../components/Navbar";
 import { db } from "../firebase";
 import { generateCertificatePdf } from "../utils/certificatePdf";
+import { useToast } from "../components/toastContext";
 
 function formatValue(value) {
   if (value === undefined || value === null || value === "") {
@@ -119,8 +120,6 @@ export default function StudentDashboard({ user, role }) {
   const [certificates, setCertificates] = useState([]);
   const [organizationNames, setOrganizationNames] = useState({});
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
   const [copiedField, setCopiedField] = useState("");
   const [qrCertificate, setQrCertificate] = useState(null);
   const [downloadingCertificateId, setDownloadingCertificateId] = useState("");
@@ -131,19 +130,18 @@ export default function StudentDashboard({ user, role }) {
     () => (user?.email || "").trim().toLowerCase(),
     [user?.email],
   );
+  const toast = useToast();
 
   const fetchCertificates = useCallback(async () => {
     if (!studentEmail) {
       setCertificates([]);
       setOrganizationNames({});
       setLoading(false);
-      setError("Your student email was not found. Please log in again.");
+      toast.error("Your student email was not found. Please log in again.");
       return;
     }
 
     setLoading(true);
-    setError("");
-    setSuccess("");
 
     try {
       const certificatesQuery = query(
@@ -192,11 +190,11 @@ export default function StudentDashboard({ user, role }) {
       setOrganizationNames(Object.fromEntries(organizationEntries));
     } catch (err) {
       console.error(err);
-      setError("Unable to load your certificates. Please try again.");
+      toast.error("Unable to load your certificates. Please try again.");
     } finally {
       setLoading(false);
     }
-  }, [studentEmail]);
+  }, [studentEmail, toast]);
 
   useEffect(() => {
     fetchCertificates();
@@ -249,19 +247,18 @@ export default function StudentDashboard({ user, role }) {
 
   const copyValue = async ({ key, value, successMessage }) => {
     if (!value) {
-      setError("Nothing to copy yet.");
+      toast.warning("Nothing to copy yet.");
       return;
     }
 
     try {
       await navigator.clipboard.writeText(value);
       setCopiedField(key);
-      setSuccess(successMessage);
+      toast.success(successMessage);
       window.setTimeout(() => setCopiedField(""), 2000);
-      window.setTimeout(() => setSuccess(""), 2200);
     } catch (err) {
       console.error(err);
-      setError("Could not copy to clipboard. Please copy it manually.");
+      toast.error("Could not copy to clipboard. Please copy it manually.");
     }
   };
 
@@ -269,7 +266,7 @@ export default function StudentDashboard({ user, role }) {
     const certificateId = getCertificateIdentifier(certificate);
 
     if (!certificateId) {
-      setError("Certificate ID is missing. PDF cannot be generated.");
+      toast.error("Certificate ID is missing. PDF cannot be generated.");
       return;
     }
 
@@ -280,8 +277,6 @@ export default function StudentDashboard({ user, role }) {
       "";
 
     setDownloadingCertificateId(certificateId);
-    setError("");
-    setSuccess("");
 
     try {
       await generateCertificatePdf(
@@ -292,11 +287,10 @@ export default function StudentDashboard({ user, role }) {
         },
         { organizationName },
       );
-      setSuccess("Certificate PDF downloaded.");
-      window.setTimeout(() => setSuccess(""), 2200);
+      toast.success("Certificate PDF downloaded.");
     } catch (err) {
       console.error(err);
-      setError("Could not generate the certificate PDF. Please try again.");
+      toast.error("Could not generate the certificate PDF. Please try again.");
     } finally {
       setDownloadingCertificateId("");
     }
@@ -346,9 +340,6 @@ export default function StudentDashboard({ user, role }) {
             <strong className="stat-value">{stats.pending}</strong>
           </section>
         </div>
-
-        {error ? <div className="alert alert-error">{error}</div> : null}
-        {success ? <div className="alert alert-success">{success}</div> : null}
 
         <section className="card">
           <div className="section-header">

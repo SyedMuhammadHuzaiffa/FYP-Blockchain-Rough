@@ -4,6 +4,7 @@ import { httpsCallable } from "firebase/functions";
 import { auth, functions } from "../firebase";
 import { Link, useNavigate } from "react-router-dom";
 import { ThemeToggle } from "../components/ThemeProvider";
+import { useToast } from "../components/toastContext";
 
 function getRegisterErrorMessage(error) {
   switch (error?.code) {
@@ -27,10 +28,10 @@ export default function Register() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
   const navigate = useNavigate();
+  const toast = useToast();
   const createStudentProfile = useMemo(
     () => httpsCallable(functions, "createStudentProfile"),
     [],
@@ -38,7 +39,6 @@ export default function Register() {
 
   const handleRegister = async (event) => {
     event.preventDefault();
-    setError("");
 
     try {
       setLoading(true);
@@ -56,10 +56,11 @@ export default function Register() {
         name: name.trim(),
       });
 
+      toast.success("Registration successful. Welcome to your student wallet.");
       navigate("/student", { replace: true });
     } catch (err) {
-      console.log(err);
-      setError(getRegisterErrorMessage(err));
+      console.error(err);
+      toast.error(getRegisterErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -76,8 +77,6 @@ export default function Register() {
           </div>
           <ThemeToggle />
         </div>
-
-        {error ? <div className="alert alert-error">{error}</div> : null}
 
         <form className="grid" onSubmit={handleRegister}>
           <label className="field">

@@ -6,6 +6,7 @@ import { httpsCallable } from "firebase/functions";
 import { db, functions } from "../firebase";
 import AppLayout from "../components/AppLayout";
 import { generateCertificatePdf } from "../utils/certificatePdf";
+import { useToast } from "../components/toastContext";
 
 const emptyTeacherForm = {
   name: "",
@@ -425,7 +426,7 @@ export default function OrgAdminDashboard({ user }) {
   const [copiedCertificateId, setCopiedCertificateId] = useState("");
   const [qrCertificate, setQrCertificate] = useState(null);
   const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
+  const toast = useToast();
 
   const createTeacherFn = useMemo(
     () => httpsCallable(functions, "createTeacher"),
@@ -478,10 +479,11 @@ export default function OrgAdminDashboard({ user }) {
     } catch (err) {
       console.error(err);
       setError("Failed to load teachers for this organization.");
+      toast.error("Failed to load teachers for this organization.");
     } finally {
       setTeachersLoading(false);
     }
-  }, []);
+  }, [toast]);
 
   const fetchCertificates = useCallback(async (teacherUid) => {
     if (!teacherUid) {
@@ -507,10 +509,11 @@ export default function OrgAdminDashboard({ user }) {
     } catch (err) {
       console.error(err);
       setError("Failed to load your issued certificates.");
+      toast.error("Failed to load your issued certificates.");
     } finally {
       setCertificatesLoading(false);
     }
-  }, []);
+  }, [toast]);
 
   const fetchProfile = useCallback(async () => {
     if (!user?.uid) return;
@@ -525,6 +528,7 @@ export default function OrgAdminDashboard({ user }) {
       if (!profileSnap.exists()) {
         setProfile(null);
         setError("Your user profile was not found.");
+        toast.error("Your user profile was not found.");
         return;
       }
 
@@ -555,10 +559,11 @@ export default function OrgAdminDashboard({ user }) {
     } catch (err) {
       console.error(err);
       setError("Failed to load your dashboard profile.");
+      toast.error("Failed to load your dashboard profile.");
     } finally {
       setPageLoading(false);
     }
-  }, [fetchCertificates, fetchTeachers, user?.uid]);
+  }, [fetchCertificates, fetchTeachers, toast, user?.uid]);
 
   useEffect(() => {
     fetchProfile();
@@ -592,10 +597,11 @@ export default function OrgAdminDashboard({ user }) {
     try {
       await navigator.clipboard.writeText(verifyLink);
       setCopiedCertificateId(currentCertificateId);
+      toast.success("Verify link copied.");
       window.setTimeout(() => setCopiedCertificateId(""), 2000);
     } catch (err) {
       console.error(err);
-      setError("Could not copy verify link. Please copy it from the link.");
+      toast.error("Could not copy verify link. Please copy it from the link.");
     }
   };
 
@@ -603,13 +609,12 @@ export default function OrgAdminDashboard({ user }) {
     const currentCertificateId = getCertificateIdentifier(certificate);
 
     if (!currentCertificateId) {
-      setError("Certificate ID is missing. PDF cannot be generated.");
+      toast.error("Certificate ID is missing. PDF cannot be generated.");
       return;
     }
 
     setDownloadingCertificateId(currentCertificateId);
     setError("");
-    setSuccess("");
 
     try {
       await generateCertificatePdf(
@@ -630,10 +635,10 @@ export default function OrgAdminDashboard({ user }) {
             "",
         },
       );
-      setSuccess("Certificate PDF downloaded.");
+      toast.success("Certificate PDF downloaded.");
     } catch (err) {
       console.error(err);
-      setError("Could not generate the certificate PDF. Please try again.");
+      toast.error("Could not generate the certificate PDF. Please try again.");
     } finally {
       setDownloadingCertificateId("");
     }
@@ -642,19 +647,18 @@ export default function OrgAdminDashboard({ user }) {
   const createTeacher = async (event) => {
     event.preventDefault();
     setError("");
-    setSuccess("");
 
     const name = teacherForm.name.trim();
     const email = teacherForm.email.trim();
     const password = teacherForm.password;
 
     if (!name || !email || !password.trim()) {
-      setError("Name, email, and temporary password are required.");
+      toast.warning("Name, email, and temporary password are required.");
       return;
     }
 
     if (password.length < 6) {
-      setError("Temporary password must be at least 6 characters.");
+      toast.warning("Temporary password must be at least 6 characters.");
       return;
     }
 
@@ -669,11 +673,11 @@ export default function OrgAdminDashboard({ user }) {
       });
 
       setTeacherForm(emptyTeacherForm);
-      setSuccess("Teacher created successfully. Invite email sent.");
+      toast.success("Teacher created successfully. Invite email sent.");
       await fetchTeachers(organizationId);
     } catch (err) {
       console.error(err);
-      setError(getReadableError(err));
+      toast.error(getReadableError(err));
     } finally {
       setCreatingTeacher(false);
     }
@@ -687,7 +691,6 @@ export default function OrgAdminDashboard({ user }) {
     if (!confirmRevoke) return;
 
     setError("");
-    setSuccess("");
 
     try {
       setRevokingTeacherId(teacher.id);
@@ -697,11 +700,11 @@ export default function OrgAdminDashboard({ user }) {
         uid: teacher.uid || teacher.id,
       });
 
-      setSuccess("Teacher revoked successfully.");
+      toast.success("Teacher revoked successfully.");
       await fetchTeachers(organizationId);
     } catch (err) {
       console.error(err);
-      setError(getReadableError(err));
+      toast.error(getReadableError(err));
     } finally {
       setRevokingTeacherId("");
     }
@@ -710,7 +713,6 @@ export default function OrgAdminDashboard({ user }) {
   const issueCertificate = async (event) => {
     event.preventDefault();
     setError("");
-    setSuccess("");
 
     const studentName = certificateForm.studentName.trim();
     const studentEmail = certificateForm.studentEmail.trim();
@@ -718,7 +720,7 @@ export default function OrgAdminDashboard({ user }) {
     const issueDate = certificateForm.issueDate.trim();
 
     if (!studentName || !studentEmail || !courseName || !issueDate) {
-      setError(
+      toast.warning(
         "Student name, student email, course name, and issue date are required.",
       );
       return;
@@ -736,13 +738,13 @@ export default function OrgAdminDashboard({ user }) {
       });
 
       setCertificateForm(emptyCertificateForm);
-      setSuccess(
+      toast.success(
         `Certificate issued successfully. ID: ${result.data.certificateId}`,
       );
       await fetchCertificates(user.uid);
     } catch (err) {
       console.error(err);
-      setError(getReadableError(err));
+      toast.error(getReadableError(err));
     } finally {
       setIssuingCertificate(false);
     }
@@ -750,7 +752,6 @@ export default function OrgAdminDashboard({ user }) {
 
   const previewBulkCertificates = () => {
     setError("");
-    setSuccess("");
 
     const { rows, validationErrors } =
       parseBulkCertificateInput(bulkCsvInput);
@@ -760,23 +761,22 @@ export default function OrgAdminDashboard({ user }) {
     setBulkPreviewReady(validationErrors.length === 0 && rows.length > 0);
 
     if (validationErrors.length > 0) {
-      setError("Fix the highlighted bulk rows before issuing.");
+      toast.warning("Fix the highlighted bulk rows before issuing.");
       return;
     }
 
-    setSuccess(`Preview ready for ${rows.length} bulk certificate row(s).`);
+    toast.info(`Preview ready for ${rows.length} bulk certificate row(s).`);
   };
 
   const issueBulkCertificates = async () => {
     setError("");
-    setSuccess("");
 
     if (
       !bulkPreviewReady ||
       bulkValidationErrors.length > 0 ||
       bulkRows.length === 0
     ) {
-      setError("Preview valid bulk rows before issuing.");
+      toast.warning("Preview valid bulk rows before issuing.");
       return;
     }
 
@@ -795,7 +795,7 @@ export default function OrgAdminDashboard({ user }) {
       setBulkRows([]);
       setBulkValidationErrors([]);
       setBulkPreviewReady(false);
-      setSuccess(
+      toast.success(
         batchId
           ? `Bulk batch created successfully. Batch ID: ${batchId}. Count: ${count}. Blockchain: ${blockchainStatus}.`
           : `Bulk batch created successfully. Count: ${count}. Blockchain: ${blockchainStatus}.`,
@@ -803,7 +803,7 @@ export default function OrgAdminDashboard({ user }) {
       await fetchCertificates(user.uid);
     } catch (err) {
       console.error(err);
-      setError(getReadableError(err));
+      toast.error(getReadableError(err));
     } finally {
       setIssuingBulkCertificates(false);
     }
@@ -813,7 +813,7 @@ export default function OrgAdminDashboard({ user }) {
     const currentCertificateId = getCertificateIdentifier(certificate);
 
     if (!currentCertificateId) {
-      setError("Certificate ID is missing.");
+      toast.error("Certificate ID is missing.");
       return;
     }
 
@@ -824,10 +824,9 @@ export default function OrgAdminDashboard({ user }) {
     if (!confirmRevoke) return;
 
     setError("");
-    setSuccess("");
 
     if (certificate?.blockchainStatus !== "confirmed") {
-      setError("Only blockchain-confirmed certificates can be revoked.");
+      toast.warning("Only blockchain-confirmed certificates can be revoked.");
       return;
     }
 
@@ -840,7 +839,7 @@ export default function OrgAdminDashboard({ user }) {
       });
       const revokeTxHash = result.data?.revokeTxHash;
 
-      setSuccess(
+      toast.success(
         revokeTxHash
           ? `Certificate revoked successfully. Revoke tx: ${revokeTxHash}`
           : "Certificate revoked successfully.",
@@ -848,7 +847,7 @@ export default function OrgAdminDashboard({ user }) {
       await fetchCertificates(user.uid);
     } catch (err) {
       console.error(err);
-      setError(getReadableError(err));
+      toast.error(getReadableError(err));
       await fetchCertificates(user.uid);
     } finally {
       setRevokingCertificateId("");
@@ -918,9 +917,6 @@ export default function OrgAdminDashboard({ user }) {
             <strong className="hash-value">{organizationId || "-"}</strong>
           </section>
         </div>
-
-        {error ? <div className="alert alert-error">{error}</div> : null}
-        {success ? <div className="alert alert-success">{success}</div> : null}
 
         {isTeacher ? (
           <>

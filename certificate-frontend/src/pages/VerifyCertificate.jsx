@@ -10,6 +10,7 @@ import {
 } from "../blockchain/verifyCertificateOnChain";
 import { ThemeToggle } from "../components/ThemeProvider";
 import { generateCertificatePdf } from "../utils/certificatePdf";
+import { useToast } from "../components/toastContext";
 
 const AMOY_TX_BASE_URL = "https://amoy.polygonscan.com/tx/";
 
@@ -243,9 +244,9 @@ export default function VerifyCertificate() {
   const [notFound, setNotFound] = useState(false);
   const [certificateError, setCertificateError] = useState("");
   const [organizationWarning, setOrganizationWarning] = useState("");
-  const [pdfError, setPdfError] = useState("");
   const [copiedField, setCopiedField] = useState("");
   const [pdfLoading, setPdfLoading] = useState(false);
+  const toast = useToast();
   const [blockchainCheck, setBlockchainCheck] = useState({
     loading: false,
     checked: false,
@@ -267,7 +268,6 @@ export default function VerifyCertificate() {
       setNotFound(false);
       setCertificateError("");
       setOrganizationWarning("");
-      setPdfError("");
       setCertificate(null);
       setOrganizationName("");
       setBlockchainCheck({
@@ -397,10 +397,11 @@ export default function VerifyCertificate() {
     try {
       await navigator.clipboard.writeText(value);
       setCopiedField(key);
+      toast.success("Value copied.");
       window.setTimeout(() => setCopiedField(""), 2000);
     } catch (err) {
       console.error(err);
-      setPdfError("Could not copy this value.");
+      toast.error("Could not copy this value.");
     }
   };
 
@@ -412,12 +413,11 @@ export default function VerifyCertificate() {
     const currentCertificateId = certificate?.certificateId || certificate?.id;
 
     if (!currentCertificateId) {
-      setPdfError("This certificate is missing an ID, so the PDF cannot be generated.");
+      toast.error("This certificate is missing an ID, so the PDF cannot be generated.");
       return;
     }
 
     setPdfLoading(true);
-    setPdfError("");
 
     try {
       const resolvedOrganizationName =
@@ -438,9 +438,10 @@ export default function VerifyCertificate() {
           isRevoked,
         },
       );
+      toast.success("Certificate PDF downloaded.");
     } catch (err) {
       console.error(err);
-      setPdfError("Could not generate the certificate PDF. Please try again.");
+      toast.error("Could not generate the certificate PDF. Please try again.");
     } finally {
       setPdfLoading(false);
     }
@@ -641,8 +642,6 @@ export default function VerifyCertificate() {
       </section>
 
       {organizationWarning ? <div className="alert">{organizationWarning}</div> : null}
-      {pdfError ? <div className="alert alert-error">{pdfError}</div> : null}
-
       <div className="grid grid-two">
         <section className="card">
           <h2>Certificate Info</h2>

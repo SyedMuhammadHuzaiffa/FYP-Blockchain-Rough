@@ -2,6 +2,7 @@ import { useState } from "react";
 import { loginUser, getUserRole } from "../auth";
 import { Link, useNavigate } from "react-router-dom";
 import { ThemeToggle } from "../components/ThemeProvider";
+import { useToast } from "../components/toastContext";
 
 function getLoginErrorMessage(error) {
   switch (error?.code) {
@@ -21,14 +22,13 @@ function getLoginErrorMessage(error) {
 export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
   const navigate = useNavigate();
+  const toast = useToast();
 
   const handleLogin = async (event) => {
     event.preventDefault();
-    setError("");
 
     try {
       setLoading(true);
@@ -42,10 +42,10 @@ export default function Login() {
       } else if (role === "student") {
         navigate("/student");
       } else {
-        setError("No valid role found for this user.");
+        toast.warning("No valid role found for this user.");
       }
     } catch (err) {
-      setError(getLoginErrorMessage(err));
+      toast.error(getLoginErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -62,8 +62,6 @@ export default function Login() {
           </div>
           <ThemeToggle />
         </div>
-
-        {error ? <div className="alert alert-error">{error}</div> : null}
 
         <form className="grid" onSubmit={handleLogin}>
           <label className="field">
