@@ -13,8 +13,17 @@ contract CertificateRegistry {
         uint256 revokedAt;
     }
 
+    struct BatchRecord {
+        bytes32 batchRoot;
+        address issuer;
+        uint256 issuedAt;
+        bool revoked;
+        uint256 revokedAt;
+    }
+
     mapping(address => bool) public authorizedIssuers;
     mapping(string => CertificateRecord) private certificates;
+    mapping(string => BatchRecord) private batches;
 
     event IssuerAuthorized(address indexed issuer);
     event IssuerRemoved(address indexed issuer);
@@ -29,6 +38,19 @@ contract CertificateRegistry {
 
     event CertificateRevoked(
         string indexed certificateId,
+        address indexed revokedBy,
+        uint256 revokedAt
+    );
+
+    event BatchAnchored(
+        string indexed batchId,
+        bytes32 indexed batchRoot,
+        address indexed issuer,
+        uint256 issuedAt
+    );
+
+    event BatchRevoked(
+        string indexed batchId,
         address indexed revokedBy,
         uint256 revokedAt
     );
@@ -111,6 +133,41 @@ contract CertificateRegistry {
         emit CertificateRevoked(certificateId, msg.sender, block.timestamp);
     }
 
+    function anchorBatch(
+        string calldata batchId,
+        bytes32 batchRoot
+    ) external onlyAuthorizedIssuer {
+        require(bytes(batchId).length > 0, "Empty batchId");
+        require(batchRoot != bytes32(0), "Empty batchRoot");
+        require(batches[batchId].issuedAt == 0, "Batch already anchored");
+
+        batches[batchId] = BatchRecord({
+            batchRoot: batchRoot,
+            issuer: msg.sender,
+            issuedAt: block.timestamp,
+            revoked: false,
+            revokedAt: 0
+        });
+
+        emit BatchAnchored(batchId, batchRoot, msg.sender, block.timestamp);
+    }
+
+    function revokeBatch(
+        string calldata batchId
+    ) external onlyAuthorizedIssuer {
+        require(bytes(batchId).length > 0, "Empty batchId");
+
+        BatchRecord storage batch = batches[batchId];
+
+        require(batch.issuedAt != 0, "Batch not found");
+        require(!batch.revoked, "Batch already revoked");
+
+        batch.revoked = true;
+        batch.revokedAt = block.timestamp;
+
+        emit BatchRevoked(batchId, msg.sender, block.timestamp);
+    }
+
     function verifyCertificate(
         string calldata certificateId
     )
@@ -137,6 +194,33 @@ contract CertificateRegistry {
             certificate.revoked,
             certificate.revokedAt,
             certificateExists
+        );
+    }
+
+    function verifyBatch(
+        string calldata batchId
+    )
+        external
+        view
+        returns (
+            bytes32 batchRoot,
+            address issuer,
+            uint256 issuedAt,
+            bool revoked,
+            uint256 revokedAt,
+            bool exists
+        )
+    {
+        BatchRecord memory batch = batches[batchId];
+        bool batchExists = batch.issuedAt != 0;
+
+        return (
+            batch.batchRoot,
+            batch.issuer,
+            batch.issuedAt,
+            batch.revoked,
+            batch.revokedAt,
+            batchExists
         );
     }
 }

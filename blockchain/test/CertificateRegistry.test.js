@@ -5,16 +5,19 @@ const { anyValue } = require("@nomicfoundation/hardhat-chai-matchers/withArgs");
 describe("CertificateRegistry", function () {
   const certificateId = "cert-firestore-001";
   const ipfsCid = "bafybeicertificatecidexample";
+  const batchId = "batch-firestore-001";
 
   let owner;
   let issuer;
   let unauthorized;
   let registry;
   let certificateHash;
+  let batchRoot;
 
   beforeEach(async function () {
     [owner, issuer, unauthorized] = await ethers.getSigners();
     certificateHash = ethers.keccak256(ethers.toUtf8Bytes("certificate-v1"));
+    batchRoot = ethers.keccak256(ethers.toUtf8Bytes("batch-root-v1"));
 
     const CertificateRegistry = await ethers.getContractFactory(
       "CertificateRegistry",
@@ -27,6 +30,13 @@ describe("CertificateRegistry", function () {
     const tx = await registry
       .connect(signer)
       .issueCertificate(certificateId, certificateHash, ipfsCid);
+    const receipt = await tx.wait();
+
+    return { tx, receipt };
+  }
+
+  async function anchorDefaultBatch(signer = owner) {
+    const tx = await registry.connect(signer).anchorBatch(batchId, batchRoot);
     const receipt = await tx.wait();
 
     return { tx, receipt };
@@ -163,5 +173,74 @@ describe("CertificateRegistry", function () {
     await expect(
       registry.issueCertificate(certificateId, ethers.ZeroHash, ipfsCid),
     ).to.be.revertedWith("Empty certificateHash");
+  });
+
+  it("authorized issuer can anchor batch", async function () {
+    await registry.authorizeIssuer(issuer.address);
+
+    await expect(registry.connect(issuer).anchorBatch(batchId, batchRoot))
+      .to.emit(registry, "BatchAnchored")
+      .withArgs(batchId, batchRoot, issuer.address, anyValue);
+  });
+
+  it("duplicate batch anchor fails", async function () {
+    await anchorDefaultBatch();
+
+    await expect(registry.anchorBatch(batchId, batchRoot)).to.be.revertedWith(
+      "Batch already anchored",
+    );
+  });
+
+  it("verify existing batch returns correct fields", async function () {
+    const { receipt } = await anchorDefaultBatch();
+    const block = await ethers.provider.getBlock(receipt.blockNumber);
+
+    const result = await registry.verifyBatch(batchId);
+
+    expect(result.batchRoot).to.equal(batchRoot);
+    expect(result.issuer).to.equal(owner.address);
+    expect(result.issuedAt).to.equal(block.timestamp);
+    expect(result.revoked).to.equal(false);
+    expect(result.revokedAt).to.equal(0n);
+    expect(result.exists).to.equal(true);
+  });
+
+  it("verify missing batch returns exists false", async function () {
+    const result = await registry.verifyBatch("missing-batch");
+
+    expect(result.batchRoot).to.equal(ethers.ZeroHash);
+    expect(result.issuer).to.equal(ethers.ZeroAddress);
+    expect(result.issuedAt).to.equal(0n);
+    expect(result.revoked).to.equal(false);
+    expect(result.revokedAt).to.equal(0n);
+    expect(result.exists).to.equal(false);
+  });
+
+  it("unauthorized user cannot anchor batch", async function () {
+    await expect(
+      registry.connect(unauthorized).anchorBatch(batchId, batchRoot),
+    ).to.be.revertedWith("Not authorized issuer");
+  });
+
+  it("invalid batch fields fail", async function () {
+    await expect(registry.anchorBatch("", batchRoot)).to.be.revertedWith(
+      "Empty batchId",
+    );
+    await expect(registry.anchorBatch(batchId, ethers.ZeroHash)).to.be
+      .revertedWith("Empty batchRoot");
+  });
+
+  it("authorized issuer can revoke batch", async function () {
+    await registry.authorizeIssuer(issuer.address);
+    await anchorDefaultBatch(issuer);
+
+    await expect(registry.connect(issuer).revokeBatch(batchId))
+      .to.emit(registry, "BatchRevoked")
+      .withArgs(batchId, issuer.address, anyValue);
+
+    const result = await registry.verifyBatch(batchId);
+
+    expect(result.revoked).to.equal(true);
+    expect(result.revokedAt).to.be.greaterThan(0n);
   });
 });

@@ -7,6 +7,7 @@ const {
 } = require("./blockchain/certificateHash");
 const { buildMerkleBatch } = require("./blockchain/merkleBatch");
 const {
+  anchorBatchOnChain,
   anchorCertificateOnChain,
   revokeCertificateOnChain,
 } = require("./blockchain/certificateRegistry");
@@ -1206,6 +1207,12 @@ exports.issueBulkCertificates = onCall(
     region: REGION,
     cors: true,
     invoker: "public",
+    secrets: [
+      BLOCKCHAIN_RPC_URL,
+      BLOCKCHAIN_PRIVATE_KEY,
+      CERTIFICATE_REGISTRY_ADDRESS,
+      BLOCKCHAIN_CHAIN_ID,
+    ],
   },
   async (request) => {
     try {
@@ -1358,13 +1365,105 @@ exports.issueBulkCertificates = onCall(
 
       await writeBatch.commit();
 
+      let blockchainStatus = "pending";
+      let blockchainError = null;
+
+      try {
+        const anchorResult = await anchorBatchOnChain({
+          batchId,
+          batchRoot: merkleBatch.root,
+          config: getBlockchainConfig(),
+        });
+        const successBatch = db.batch();
+
+        successBatch.update(batchRef, {
+          blockchainStatus: "confirmed",
+          blockchainTxHash: anchorResult.txHash,
+          contractAddress: anchorResult.contractAddress,
+          blockchainChainId: anchorResult.chainId,
+          blockNumber: anchorResult.blockNumber,
+          blockchainAnchoredAt: timestamp(),
+          blockchainIssuerAddress: anchorResult.issuerAddress,
+          blockchainError: null,
+          updatedAt: timestamp(),
+        });
+
+        certificateRows.forEach(({ certificateRef }) => {
+          successBatch.update(certificateRef, {
+            blockchainStatus: "confirmed",
+            blockchainTxHash: anchorResult.txHash,
+            contractAddress: anchorResult.contractAddress,
+            blockchainChainId: anchorResult.chainId,
+            blockNumber: anchorResult.blockNumber,
+            blockchainBatchAnchoredAt: timestamp(),
+            blockchainError: null,
+            updatedAt: timestamp(),
+          });
+        });
+
+        addAdminLog(successBatch, {
+          action: "ANCHOR_BATCH_SUCCESS",
+          performedBy: caller.uid,
+          performedByEmail: caller.email,
+          orgId: organization.id,
+          txHash: anchorResult.txHash,
+          contractAddress: anchorResult.contractAddress,
+          chainId: anchorResult.chainId,
+          blockNumber: anchorResult.blockNumber,
+          metadata: {
+            batchId,
+            batchRoot: merkleBatch.root,
+            count: certificateIds.length,
+          },
+        });
+
+        await successBatch.commit();
+        blockchainStatus = "confirmed";
+      } catch (anchorError) {
+        blockchainStatus = "failed";
+        blockchainError = getErrorMessage(anchorError);
+        console.error("anchorBatchOnChain error:", anchorError);
+
+        const failureBatch = db.batch();
+
+        failureBatch.update(batchRef, {
+          blockchainStatus,
+          blockchainError,
+          updatedAt: timestamp(),
+        });
+
+        certificateRows.forEach(({ certificateRef }) => {
+          failureBatch.update(certificateRef, {
+            blockchainStatus,
+            blockchainError,
+            updatedAt: timestamp(),
+          });
+        });
+
+        addAdminLog(failureBatch, {
+          action: "ANCHOR_BATCH_FAILED",
+          performedBy: caller.uid,
+          performedByEmail: caller.email,
+          orgId: organization.id,
+          error: blockchainError,
+          metadata: {
+            batchId,
+            batchRoot: merkleBatch.root,
+            count: certificateIds.length,
+          },
+        });
+
+        await failureBatch.commit();
+      }
+
       return {
         success: true,
         batchId,
         batchRoot: merkleBatch.root,
         count: certificateIds.length,
         certificateIds,
-        blockchainStatus: "pending",
+        blockchainStatus,
+        blockchainError,
         message: "Bulk certificates created successfully",
       };
     } catch (error) {

@@ -1,20 +1,5 @@
 const { ethers } = require("ethers");
-const certificateRegistryAbi = [
-  ...require("./CertificateRegistry.abi.json"),
-  {
-    inputs: [
-      {
-        internalType: "string",
-        name: "certificateId",
-        type: "string",
-      },
-    ],
-    name: "revokeCertificate",
-    outputs: [],
-    stateMutability: "nonpayable",
-    type: "function",
-  },
-];
+const certificateRegistryAbi = require("./CertificateRegistry.abi.json");
 
 function normalizePrivateKey(privateKey) {
   const trimmedPrivateKey = String(privateKey || "").trim();
@@ -139,6 +124,52 @@ async function verifyCertificateOnChain(certificateId, config = {}) {
   };
 }
 
+async function anchorBatchOnChain({ batchId, batchRoot, config = {} }) {
+  if (!batchId || !String(batchId).trim()) {
+    throw new Error("batchId is required");
+  }
+
+  if (!ethers.isHexString(batchRoot, 32)) {
+    throw new Error("batchRoot must be a bytes32 hex string");
+  }
+
+  const { contract, provider, wallet, config: blockchainConfig } =
+    getCertificateRegistry(config);
+  const tx = await contract.anchorBatch(String(batchId).trim(), batchRoot);
+  const receipt = await tx.wait(1);
+  const network = await provider.getNetwork();
+
+  return {
+    txHash: tx.hash,
+    blockNumber: receipt.blockNumber,
+    contractAddress: blockchainConfig.contractAddress,
+    chainId: Number(network.chainId),
+    issuerAddress: wallet.address,
+  };
+}
+
+async function verifyBatchOnChain(batchId, config = {}) {
+  if (!batchId || !String(batchId).trim()) {
+    throw new Error("batchId is required");
+  }
+
+  const { contract, provider, config: blockchainConfig } =
+    getCertificateRegistry(config);
+  const result = await contract.verifyBatch(String(batchId).trim());
+  const network = await provider.getNetwork();
+
+  return {
+    batchRoot: result.batchRoot,
+    issuerAddress: result.issuer,
+    issuedAt: result.issuedAt,
+    revoked: result.revoked,
+    revokedAt: result.revokedAt,
+    exists: result.exists,
+    contractAddress: blockchainConfig.contractAddress,
+    chainId: Number(network.chainId),
+  };
+}
+
 async function revokeCertificateOnChain(certificateId, config = {}) {
   if (!certificateId || !String(certificateId).trim()) {
     throw new Error("certificateId is required");
@@ -160,7 +191,9 @@ async function revokeCertificateOnChain(certificateId, config = {}) {
 }
 
 module.exports = {
+  anchorBatchOnChain,
   anchorCertificateOnChain,
   revokeCertificateOnChain,
+  verifyBatchOnChain,
   verifyCertificateOnChain,
 };

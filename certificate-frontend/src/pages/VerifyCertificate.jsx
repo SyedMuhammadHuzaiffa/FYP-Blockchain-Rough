@@ -1,9 +1,13 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import { ethers } from "ethers";
 import { doc, getDoc } from "firebase/firestore";
 import { db } from "../firebase";
 import { computeCertificateHash } from "../blockchain/certificateHash";
-import { verifyCertificateOnChain } from "../blockchain/verifyCertificateOnChain";
+import {
+  verifyBatchOnChain,
+  verifyCertificateOnChain,
+} from "../blockchain/verifyCertificateOnChain";
 import { ThemeToggle } from "../components/ThemeProvider";
 import { generateCertificatePdf } from "../utils/certificatePdf";
 
@@ -16,6 +20,7 @@ const BLOCKCHAIN_RESULT = {
   HASH_MISMATCH: "HASH MISMATCH",
   NOT_FOUND: "NOT FOUND ON BLOCKCHAIN",
   FAILED: "BLOCKCHAIN CHECK FAILED",
+  BATCH_ANCHORED: "BATCH ROOT ANCHORED",
 };
 
 function formatValue(value) {
@@ -56,7 +61,44 @@ function hashesEqual(left, right) {
   );
 }
 
+function isBulkCertificate(certificate) {
+  return certificate?.issuanceMode === "bulk";
+}
+
+function isBytes32Hex(value) {
+  return /^0x[0-9a-f]{64}$/i.test(String(value || "").trim());
+}
+
+function hashPair(left, right) {
+  const normalizedLeft = normalizeHash(left);
+  const normalizedRight = normalizeHash(right);
+  const [first, second] =
+    normalizedLeft <= normalizedRight
+      ? [normalizedLeft, normalizedRight]
+      : [normalizedRight, normalizedLeft];
+
+  return ethers.keccak256(ethers.concat([first, second]));
+}
+
+function verifyMerkleProof({ leafHash, proof, root }) {
+  if (!isBytes32Hex(leafHash) || !isBytes32Hex(root) || !Array.isArray(proof)) {
+    return false;
+  }
+
+  const computedRoot = proof.reduce((currentHash, siblingHash) => {
+    if (!isBytes32Hex(siblingHash)) return "";
+
+    return currentHash ? hashPair(currentHash, siblingHash) : "";
+  }, normalizeHash(leafHash));
+
+  return hashesEqual(computedRoot, root);
+}
+
 function getHashMatch({ certificate, computedHash, onChain }) {
+  if (isBulkCertificate(certificate)) {
+    return hashesEqual(certificate?.certificateHash, computedHash);
+  }
+
   if (!onChain?.certificateHash) return false;
 
   return (
@@ -71,6 +113,17 @@ function getBlockchainResult({ blockchainCheck, certificate }) {
   if (blockchainCheck.error) return BLOCKCHAIN_RESULT.FAILED;
 
   const { onChain, computedHash } = blockchainCheck;
+
+  if (isBulkCertificate(certificate)) {
+    if (!blockchainCheck.merkleProofValid) return BLOCKCHAIN_RESULT.HASH_MISMATCH;
+    if (!onChain?.exists) return BLOCKCHAIN_RESULT.NOT_FOUND;
+    if (onChain.revoked) return BLOCKCHAIN_RESULT.REVOKED;
+
+    return hashesEqual(onChain.batchRoot, certificate?.batchRoot) &&
+      getHashMatch({ certificate, computedHash, onChain })
+      ? BLOCKCHAIN_RESULT.BATCH_ANCHORED
+      : BLOCKCHAIN_RESULT.HASH_MISMATCH;
+  }
 
   if (!onChain?.exists) return BLOCKCHAIN_RESULT.NOT_FOUND;
   if (onChain.revoked) return BLOCKCHAIN_RESULT.REVOKED;
@@ -92,6 +145,12 @@ function getBadgeClass(value, positiveValues = []) {
   }
 
   return "badge";
+}
+
+function getMerkleProofBadgeValue(merkleProofValid) {
+  if (merkleProofValid === null) return "checking";
+
+  return merkleProofValid ? "confirmed" : "mismatch";
 }
 
 function getHeroState({ firestoreStatus, blockchainResult, hashMatch, isRevoked }) {
@@ -117,6 +176,16 @@ function getHeroState({ firestoreStatus, blockchainResult, hashMatch, isRevoked 
   }
 
   if (blockchainResult === BLOCKCHAIN_RESULT.VERIFIED && firestoreStatus === "issued") {
+    return {
+      title: "VALID CERTIFICATE",
+      className: "status-hero status-valid",
+    };
+  }
+
+  if (
+    blockchainResult === BLOCKCHAIN_RESULT.BATCH_ANCHORED &&
+    firestoreStatus === "issued"
+  ) {
     return {
       title: "VALID CERTIFICATE",
       className: "status-hero status-valid",
@@ -183,6 +252,7 @@ export default function VerifyCertificate() {
     error: "",
     onChain: null,
     computedHash: "",
+    merkleProofValid: null,
   });
 
   useEffect(() => {
@@ -206,6 +276,7 @@ export default function VerifyCertificate() {
         error: "",
         onChain: null,
         computedHash: "",
+        merkleProofValid: null,
       });
 
       try {
@@ -266,6 +337,14 @@ export default function VerifyCertificate() {
       if (!certificate) return;
 
       const computedHash = computeCertificateHash(certificate);
+      const isBulk = isBulkCertificate(certificate);
+      const merkleProofValid = isBulk
+        ? verifyMerkleProof({
+            leafHash: computedHash,
+            proof: certificate.batchProof,
+            root: certificate.batchRoot,
+          })
+        : null;
 
       setBlockchainCheck({
         loading: true,
@@ -273,12 +352,13 @@ export default function VerifyCertificate() {
         error: "",
         onChain: null,
         computedHash,
+        merkleProofValid,
       });
 
       try {
-        const onChain = await verifyCertificateOnChain(
-          certificate.certificateId || certificate.id,
-        );
+        const onChain = isBulk
+          ? await verifyBatchOnChain(certificate.batchId)
+          : await verifyCertificateOnChain(certificate.certificateId || certificate.id);
 
         if (!isActive) return;
 
@@ -288,6 +368,7 @@ export default function VerifyCertificate() {
           error: "",
           onChain,
           computedHash,
+          merkleProofValid,
         });
       } catch (err) {
         console.error("Blockchain verification failed:", err);
@@ -300,6 +381,7 @@ export default function VerifyCertificate() {
           error: err?.message || "Unable to check blockchain.",
           onChain: null,
           computedHash,
+          merkleProofValid,
         });
       }
     }
@@ -405,20 +487,28 @@ export default function VerifyCertificate() {
   }
 
   const firestoreStatus = certificate?.status || "unknown";
+  const isBulk = isBulkCertificate(certificate);
   const blockchainResult = getBlockchainResult({ blockchainCheck, certificate });
   const isOnChainRevoked = Boolean(blockchainCheck.onChain?.revoked);
   const isRevoked = firestoreStatus === "revoked" || isOnChainRevoked;
-  const hashMatch = blockchainCheck.onChain
-    ? getHashMatch({
-        certificate,
-        computedHash: blockchainCheck.computedHash,
-        onChain: blockchainCheck.onChain,
-      })
-    : null;
+  const hashMatch =
+    isBulk || blockchainCheck.onChain
+      ? getHashMatch({
+          certificate,
+          computedHash: blockchainCheck.computedHash,
+          onChain: blockchainCheck.onChain,
+        })
+      : null;
   const hashBadgeValue =
     hashMatch === null ? "checking" : hashMatch ? "yes" : "mismatch";
   const hashBadgeText =
     hashMatch === null ? "Hash Checking" : hashMatch ? "Hash Match" : "Hash Mismatch";
+  const merkleProofText =
+    blockchainCheck.merkleProofValid === null
+      ? "Proof Checking"
+      : blockchainCheck.merkleProofValid
+        ? "MERKLE PROOF VALID"
+        : "Merkle Proof Invalid";
   const heroState = getHeroState({
     firestoreStatus,
     blockchainResult,
@@ -441,12 +531,19 @@ export default function VerifyCertificate() {
   ];
 
   const proofRows = [
+    ["Issuance Mode", certificate?.issuanceMode || "single"],
     ["Firestore Status", certificate?.status],
     ["Blockchain Status", certificate?.blockchainStatus],
     ["Blockchain Verification Result", blockchainResult],
-    ["Hash Match", blockchainCheck.onChain ? (hashMatch ? "Yes" : "No") : "-"],
+    ["Hash Match", hashMatch === null ? "-" : hashMatch ? "Yes" : "No"],
+    ["Merkle Proof", isBulk ? merkleProofText : "-"],
+    ["Batch ID", isBulk ? certificate?.batchId : "-"],
+    ["Batch Root", isBulk ? certificate?.batchRoot : "-"],
+    ["Batch Index", isBulk ? certificate?.batchIndex : "-"],
+    ["Batch Size", isBulk ? certificate?.batchSize : "-"],
+    ["Batch Tx Hash", isBulk ? certificate?.blockchainTxHash : "-"],
     [
-      "On-chain Exists",
+      isBulk ? "On-chain Batch Exists" : "On-chain Exists",
       blockchainCheck.onChain
         ? blockchainCheck.onChain.exists
           ? "Yes"
@@ -454,7 +551,7 @@ export default function VerifyCertificate() {
         : "-",
     ],
     [
-      "On-chain Revoked",
+      isBulk ? "On-chain Batch Revoked" : "On-chain Revoked",
       blockchainCheck.onChain
         ? blockchainCheck.onChain.revoked
           ? "Yes"
@@ -469,10 +566,16 @@ export default function VerifyCertificate() {
       certificate?.blockchainRevokedByAddress,
     ],
     ["Block Number", certificate?.blockNumber],
+    [
+      isBulk ? "On-chain Batch Root" : "On-chain Hash",
+      isBulk
+        ? blockchainCheck.onChain?.batchRoot
+        : blockchainCheck.onChain?.certificateHash,
+    ],
     ["On-chain Issuer", blockchainCheck.onChain?.issuer],
     ["On-chain Issued At", blockchainCheck.onChain?.issuedAt],
     ["On-chain Revoked At", blockchainCheck.onChain?.revokedAt],
-    ["On-chain IPFS CID", blockchainCheck.onChain?.ipfsCid],
+    ["On-chain IPFS CID", isBulk ? "-" : blockchainCheck.onChain?.ipfsCid],
     ["IPFS Status", certificate?.ipfsStatus],
     ["Blockchain Check Error", blockchainCheck.error],
   ];
@@ -486,7 +589,8 @@ export default function VerifyCertificate() {
           </span>
           <span
             className={getBadgeClass(
-              blockchainResult === BLOCKCHAIN_RESULT.VERIFIED
+              blockchainResult === BLOCKCHAIN_RESULT.VERIFIED ||
+                blockchainResult === BLOCKCHAIN_RESULT.BATCH_ANCHORED
                 ? "confirmed"
                 : blockchainResult,
               ["confirmed"],
@@ -497,6 +601,16 @@ export default function VerifyCertificate() {
           <span className={getBadgeClass(hashBadgeValue, ["yes"])}>
             {hashBadgeText}
           </span>
+          {isBulk ? (
+            <span
+              className={getBadgeClass(
+                getMerkleProofBadgeValue(blockchainCheck.merkleProofValid),
+                ["confirmed"],
+              )}
+            >
+              {merkleProofText}
+            </span>
+          ) : null}
           <span className={getBadgeClass(isRevoked ? "revoked" : "active", ["active"])}>
             {isRevoked ? "Revoked" : "Not Revoked"}
           </span>
@@ -550,7 +664,8 @@ export default function VerifyCertificate() {
             </span>
             <span
               className={getBadgeClass(
-                blockchainResult === BLOCKCHAIN_RESULT.VERIFIED
+                blockchainResult === BLOCKCHAIN_RESULT.VERIFIED ||
+                  blockchainResult === BLOCKCHAIN_RESULT.BATCH_ANCHORED
                   ? "confirmed"
                   : blockchainResult,
                 ["confirmed"],
@@ -561,6 +676,16 @@ export default function VerifyCertificate() {
             <span className={getBadgeClass(hashBadgeValue, ["yes"])}>
               Hash
             </span>
+            {isBulk ? (
+              <span
+                className={getBadgeClass(
+                  getMerkleProofBadgeValue(blockchainCheck.merkleProofValid),
+                  ["confirmed"],
+                )}
+              >
+                Merkle
+              </span>
+            ) : null}
           </div>
 
           <div className="proof-card-grid">
@@ -569,18 +694,24 @@ export default function VerifyCertificate() {
               <strong>{formatValue(certificate?.status)}</strong>
             </article>
             <article className="proof-card">
-              <span>Blockchain</span>
+              <span>{isBulk ? "Batch Root" : "Blockchain"}</span>
               <strong>{blockchainResult}</strong>
             </article>
             <article className="proof-card">
               <span>Hash Integrity</span>
               <strong>{hashBadgeText}</strong>
             </article>
+            {isBulk ? (
+              <article className="proof-card">
+                <span>Merkle Proof</span>
+                <strong>{merkleProofText}</strong>
+              </article>
+            ) : null}
           </div>
 
           <dl className="detail-list">
             <div className="detail-row">
-              <dt>Blockchain Tx Hash</dt>
+              <dt>{isBulk ? "Batch Tx Hash" : "Blockchain Tx Hash"}</dt>
               <dd>
                 <CopyableValue
                   label="Tx"
@@ -592,6 +723,27 @@ export default function VerifyCertificate() {
                 />
               </dd>
             </div>
+
+            {isBulk ? (
+              <>
+                <div className="detail-row">
+                  <dt>Batch ID</dt>
+                  <dd className="hash-value">{formatValue(certificate?.batchId)}</dd>
+                </div>
+                <div className="detail-row">
+                  <dt>Batch Root</dt>
+                  <dd className="hash-value">{formatValue(certificate?.batchRoot)}</dd>
+                </div>
+                <div className="detail-row">
+                  <dt>Batch Index</dt>
+                  <dd>{formatValue(certificate?.batchIndex)}</dd>
+                </div>
+                <div className="detail-row">
+                  <dt>Batch Size</dt>
+                  <dd>{formatValue(certificate?.batchSize)}</dd>
+                </div>
+              </>
+            ) : null}
 
             <div className="detail-row">
               <dt>Revoke Tx Hash</dt>
@@ -633,9 +785,13 @@ export default function VerifyCertificate() {
             </div>
 
             <div className="detail-row">
-              <dt>On-chain Hash</dt>
+              <dt>{isBulk ? "On-chain Batch Root" : "On-chain Hash"}</dt>
               <dd className="hash-value">
-                {formatValue(blockchainCheck.onChain?.certificateHash)}
+                {formatValue(
+                  isBulk
+                    ? blockchainCheck.onChain?.batchRoot
+                    : blockchainCheck.onChain?.certificateHash,
+                )}
               </dd>
             </div>
           </dl>

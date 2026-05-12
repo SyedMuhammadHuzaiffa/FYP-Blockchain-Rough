@@ -1,7 +1,7 @@
 import { ethers } from "ethers";
 
 const RPC_URL = "https://polygon-amoy.drpc.org";
-const CONTRACT_ADDRESS = "0xcC56D37F7AD8251032392f04B47ae79f9c02ED1E";
+const CONTRACT_ADDRESS = "0xF0783186B4a5C64351932863A94B977B08df4683";
 
 const CERTIFICATE_REGISTRY_ABI = [
   {
@@ -23,6 +23,50 @@ const CERTIFICATE_REGISTRY_ABI = [
         internalType: "string",
         name: "ipfsCid",
         type: "string",
+      },
+      {
+        internalType: "address",
+        name: "issuer",
+        type: "address",
+      },
+      {
+        internalType: "uint256",
+        name: "issuedAt",
+        type: "uint256",
+      },
+      {
+        internalType: "bool",
+        name: "revoked",
+        type: "bool",
+      },
+      {
+        internalType: "uint256",
+        name: "revokedAt",
+        type: "uint256",
+      },
+      {
+        internalType: "bool",
+        name: "exists",
+        type: "bool",
+      },
+    ],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [
+      {
+        internalType: "string",
+        name: "batchId",
+        type: "string",
+      },
+    ],
+    name: "verifyBatch",
+    outputs: [
+      {
+        internalType: "bytes32",
+        name: "batchRoot",
+        type: "bytes32",
       },
       {
         internalType: "address",
@@ -78,6 +122,31 @@ export async function verifyCertificateOnChain(certificateId) {
     exists: Boolean(result.exists),
     certificateHash: result.certificateHash,
     ipfsCid: result.ipfsCid,
+    issuer: result.issuer,
+    issuedAt: normalizeUint(result.issuedAt),
+    revoked: Boolean(result.revoked),
+    revokedAt: normalizeUint(result.revokedAt),
+  };
+}
+
+export async function verifyBatchOnChain(batchId) {
+  const normalizedBatchId = String(batchId || "").trim();
+
+  if (!normalizedBatchId) {
+    throw new Error("batchId is required");
+  }
+
+  const provider = new ethers.JsonRpcProvider(RPC_URL);
+  const contract = new ethers.Contract(
+    CONTRACT_ADDRESS,
+    CERTIFICATE_REGISTRY_ABI,
+    provider,
+  );
+  const result = await contract.verifyBatch(normalizedBatchId);
+
+  return {
+    exists: Boolean(result.exists),
+    batchRoot: result.batchRoot,
     issuer: result.issuer,
     issuedAt: normalizeUint(result.issuedAt),
     revoked: Boolean(result.revoked),

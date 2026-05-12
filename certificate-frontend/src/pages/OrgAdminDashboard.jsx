@@ -309,7 +309,8 @@ function CertificateTable({
                             rel="noreferrer"
                             title={certificate.blockchainTxHash}
                           >
-                            Tx {truncateMiddle(certificate.blockchainTxHash)}
+                            {certificate.issuanceMode === "bulk" ? "Batch tx" : "Tx"}{" "}
+                            {truncateMiddle(certificate.blockchainTxHash)}
                           </a>
                         ) : null}
 
@@ -788,6 +789,7 @@ export default function OrgAdminDashboard({ user }) {
       });
       const batchId = result.data?.batchId || "";
       const count = result.data?.count || bulkRows.length;
+      const blockchainStatus = result.data?.blockchainStatus || "pending";
 
       setBulkCsvInput("");
       setBulkRows([]);
@@ -795,8 +797,8 @@ export default function OrgAdminDashboard({ user }) {
       setBulkPreviewReady(false);
       setSuccess(
         batchId
-          ? `Bulk batch created successfully. Batch ID: ${batchId}. Count: ${count}.`
-          : `Bulk batch created successfully. Count: ${count}.`,
+          ? `Bulk batch created successfully. Batch ID: ${batchId}. Count: ${count}. Blockchain: ${blockchainStatus}.`
+          : `Bulk batch created successfully. Count: ${count}. Blockchain: ${blockchainStatus}.`,
       );
       await fetchCertificates(user.uid);
     } catch (err) {
