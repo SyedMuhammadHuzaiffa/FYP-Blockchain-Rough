@@ -2,7 +2,23 @@
 pragma solidity ^0.8.24;
 
 contract CertificateRegistry {
-    address public owner;
+    error OnlyOwner();
+    error NotAuthorizedIssuer();
+    error InvalidIssuer();
+    error IssuerAlreadyAuthorized();
+    error IssuerNotAuthorized();
+    error EmptyCertificateId();
+    error EmptyCertificateHash();
+    error CertificateAlreadyIssued();
+    error CertificateNotFound();
+    error CertificateAlreadyRevoked();
+    error EmptyBatchId();
+    error EmptyBatchRoot();
+    error BatchAlreadyAnchored();
+    error BatchNotFound();
+    error BatchAlreadyRevoked();
+
+    address public immutable owner;
 
     struct CertificateRecord {
         bytes32 certificateHash;
@@ -56,12 +72,12 @@ contract CertificateRegistry {
     );
 
     modifier onlyOwner() {
-        require(msg.sender == owner, "Only owner");
+        if (msg.sender != owner) revert OnlyOwner();
         _;
     }
 
     modifier onlyAuthorizedIssuer() {
-        require(authorizedIssuers[msg.sender], "Not authorized issuer");
+        if (!authorizedIssuers[msg.sender]) revert NotAuthorizedIssuer();
         _;
     }
 
@@ -73,8 +89,8 @@ contract CertificateRegistry {
     }
 
     function authorizeIssuer(address issuer) external onlyOwner {
-        require(issuer != address(0), "Invalid issuer");
-        require(!authorizedIssuers[issuer], "Issuer already authorized");
+        if (issuer == address(0)) revert InvalidIssuer();
+        if (authorizedIssuers[issuer]) revert IssuerAlreadyAuthorized();
 
         authorizedIssuers[issuer] = true;
 
@@ -82,8 +98,8 @@ contract CertificateRegistry {
     }
 
     function removeIssuer(address issuer) external onlyOwner {
-        require(issuer != address(0), "Invalid issuer");
-        require(authorizedIssuers[issuer], "Issuer not authorized");
+        if (issuer == address(0)) revert InvalidIssuer();
+        if (!authorizedIssuers[issuer]) revert IssuerNotAuthorized();
 
         authorizedIssuers[issuer] = false;
 
@@ -95,77 +111,87 @@ contract CertificateRegistry {
         bytes32 certificateHash,
         string calldata ipfsCid
     ) external onlyAuthorizedIssuer {
-        require(bytes(certificateId).length > 0, "Empty certificateId");
-        require(certificateHash != bytes32(0), "Empty certificateHash");
-        require(certificates[certificateId].issuedAt == 0, "Already issued");
+        if (bytes(certificateId).length == 0) revert EmptyCertificateId();
+        if (certificateHash == bytes32(0)) revert EmptyCertificateHash();
+        CertificateRecord storage certificate = certificates[certificateId];
+        // certificateId is the unique on-chain key; block duplicate anchors.
+        if (certificate.issuedAt != 0) {
+            revert CertificateAlreadyIssued();
+        }
 
-        certificates[certificateId] = CertificateRecord({
-            certificateHash: certificateHash,
-            ipfsCid: ipfsCid,
-            issuer: msg.sender,
-            issuedAt: block.timestamp,
-            revoked: false,
-            revokedAt: 0
-        });
+        uint256 issuedAt = block.timestamp;
+
+        certificate.certificateHash = certificateHash;
+        certificate.ipfsCid = ipfsCid;
+        certificate.issuer = msg.sender;
+        certificate.issuedAt = issuedAt;
 
         emit CertificateIssued(
             certificateId,
             certificateHash,
             ipfsCid,
             msg.sender,
-            block.timestamp
+            issuedAt
         );
     }
 
     function revokeCertificate(
         string calldata certificateId
     ) external onlyAuthorizedIssuer {
-        require(bytes(certificateId).length > 0, "Empty certificateId");
+        if (bytes(certificateId).length == 0) revert EmptyCertificateId();
 
         CertificateRecord storage certificate = certificates[certificateId];
 
-        require(certificate.issuedAt != 0, "Certificate not found");
-        require(!certificate.revoked, "Already revoked");
+        // Never create or mutate a missing record during revocation.
+        if (certificate.issuedAt == 0) revert CertificateNotFound();
+        // Revocation is irreversible, so a second revoke must not rewrite state.
+        if (certificate.revoked) revert CertificateAlreadyRevoked();
+
+        uint256 revokedAt = block.timestamp;
 
         certificate.revoked = true;
-        certificate.revokedAt = block.timestamp;
+        certificate.revokedAt = revokedAt;
 
-        emit CertificateRevoked(certificateId, msg.sender, block.timestamp);
+        emit CertificateRevoked(certificateId, msg.sender, revokedAt);
     }
 
     function anchorBatch(
         string calldata batchId,
         bytes32 batchRoot
     ) external onlyAuthorizedIssuer {
-        require(bytes(batchId).length > 0, "Empty batchId");
-        require(batchRoot != bytes32(0), "Empty batchRoot");
-        require(batches[batchId].issuedAt == 0, "Batch already anchored");
+        if (bytes(batchId).length == 0) revert EmptyBatchId();
+        if (batchRoot == bytes32(0)) revert EmptyBatchRoot();
+        BatchRecord storage batch = batches[batchId];
+        // batchId is the unique Merkle batch anchor key; block replacement.
+        if (batch.issuedAt != 0) revert BatchAlreadyAnchored();
 
-        batches[batchId] = BatchRecord({
-            batchRoot: batchRoot,
-            issuer: msg.sender,
-            issuedAt: block.timestamp,
-            revoked: false,
-            revokedAt: 0
-        });
+        uint256 issuedAt = block.timestamp;
 
-        emit BatchAnchored(batchId, batchRoot, msg.sender, block.timestamp);
+        batch.batchRoot = batchRoot;
+        batch.issuer = msg.sender;
+        batch.issuedAt = issuedAt;
+
+        emit BatchAnchored(batchId, batchRoot, msg.sender, issuedAt);
     }
 
     function revokeBatch(
         string calldata batchId
     ) external onlyAuthorizedIssuer {
-        require(bytes(batchId).length > 0, "Empty batchId");
+        if (bytes(batchId).length == 0) revert EmptyBatchId();
 
         BatchRecord storage batch = batches[batchId];
 
-        require(batch.issuedAt != 0, "Batch not found");
-        require(!batch.revoked, "Batch already revoked");
+        // Never create or mutate a missing batch during revocation.
+        if (batch.issuedAt == 0) revert BatchNotFound();
+        // Revocation is irreversible, so a second revoke must not rewrite state.
+        if (batch.revoked) revert BatchAlreadyRevoked();
+
+        uint256 revokedAt = block.timestamp;
 
         batch.revoked = true;
-        batch.revokedAt = block.timestamp;
+        batch.revokedAt = revokedAt;
 
-        emit BatchRevoked(batchId, msg.sender, block.timestamp);
+        emit BatchRevoked(batchId, msg.sender, revokedAt);
     }
 
     function verifyCertificate(

@@ -1,6 +1,48 @@
 const { ethers } = require("ethers");
 const certificateRegistryAbi = require("./CertificateRegistry.abi.json");
 
+const MAX_WRITE_RETRIES = 2;
+const RETRY_BASE_DELAY_MS = 500;
+const TRANSIENT_ERROR_CODES = new Set([
+  "NETWORK_ERROR",
+  "SERVER_ERROR",
+  "TIMEOUT",
+]);
+const NON_RETRYABLE_MESSAGE_PATTERNS = [
+  /execution reverted/i,
+  /\brevert\b/i,
+  /call exception/i,
+  /not authorized/i,
+  /unauthorized/i,
+  /already (issued|revoked|anchored|authorized)/i,
+  /not found/i,
+  /\bempty (certificate|batch)/i,
+  /invalid issuer/i,
+  /invalid opcode/i,
+  /insufficient funds/i,
+  /nonce too low/i,
+  /replacement transaction underpriced/i,
+  /transaction underpriced/i,
+  /already known/i,
+  /known transaction/i,
+];
+const TRANSIENT_MESSAGE_PATTERNS = [
+  /network_error/i,
+  /server_error/i,
+  /timeout/i,
+  /econnreset/i,
+  /etimedout/i,
+  /socket hang up/i,
+  /could not detect network/i,
+  /rate limit/i,
+  /too many requests/i,
+  /\b429\b/,
+  /bad gateway/i,
+  /gateway timeout/i,
+  /service unavailable/i,
+  /temporarily unavailable/i,
+];
+
 function normalizePrivateKey(privateKey) {
   const trimmedPrivateKey = String(privateKey || "").trim();
 
@@ -46,6 +88,111 @@ function getBlockchainConfig(config = {}) {
   };
 }
 
+function getErrorCode(error) {
+  return String(error?.code || error?.error?.code || "").toUpperCase();
+}
+
+function getErrorText(error) {
+  return [
+    error?.code,
+    error?.shortMessage,
+    error?.reason,
+    error?.message,
+    error?.error?.code,
+    error?.error?.message,
+    error?.info?.error?.code,
+    error?.info?.error?.message,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function getErrorStatus(error) {
+  return Number(
+    error?.status ||
+      error?.statusCode ||
+      error?.response?.status ||
+      error?.error?.status ||
+      error?.info?.status,
+  );
+}
+
+function isTransientBlockchainError(error) {
+  const code = getErrorCode(error);
+  const message = getErrorText(error);
+  const status = getErrorStatus(error);
+
+  if (code === "CALL_EXCEPTION") {
+    return false;
+  }
+
+  if (NON_RETRYABLE_MESSAGE_PATTERNS.some((pattern) => pattern.test(message))) {
+    return false;
+  }
+
+  if (TRANSIENT_ERROR_CODES.has(code)) {
+    return true;
+  }
+
+  if (status === 429 || status >= 500) {
+    return true;
+  }
+
+  return TRANSIENT_MESSAGE_PATTERNS.some((pattern) => pattern.test(message));
+}
+
+function getRetryDelayMs(attempt) {
+  return RETRY_BASE_DELAY_MS * 2 ** (attempt - 1);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function logWriteRetry(operationName, attempt, maxAttempts, delayMs, error) {
+  console.warn(
+    `${operationName} transient blockchain error on attempt ` +
+      `${attempt}/${maxAttempts}; retrying in ${delayMs}ms`,
+    {
+      code: getErrorCode(error) || undefined,
+      message: error?.shortMessage || error?.message || String(error),
+    },
+  );
+}
+
+async function withBlockchainWriteRetry(operationName, operation) {
+  const maxAttempts = MAX_WRITE_RETRIES + 1;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      const shouldRetry =
+        attempt < maxAttempts && isTransientBlockchainError(error);
+
+      if (!shouldRetry) {
+        throw error;
+      }
+
+      const delayMs = getRetryDelayMs(attempt);
+      logWriteRetry(operationName, attempt, maxAttempts, delayMs, error);
+      await sleep(delayMs);
+    }
+  }
+
+  throw new Error(`${operationName} failed after retries`);
+}
+
+async function sendWriteTransaction(operationName, sendTransaction) {
+  return withBlockchainWriteRetry(`${operationName}:send`, sendTransaction);
+}
+
+async function waitForWriteConfirmation(operationName, tx) {
+  return withBlockchainWriteRetry(`${operationName}:confirm`, () => tx.wait(1));
+}
+
 function getCertificateRegistry(config = {}) {
   const blockchainConfig = getBlockchainConfig(config);
   const provider = new ethers.JsonRpcProvider(
@@ -81,22 +228,25 @@ async function anchorCertificateOnChain({
     throw new Error("certificateHash must be a bytes32 hex string");
   }
 
-  const { contract, provider, wallet, config: blockchainConfig } =
+  const { contract, wallet, config: blockchainConfig } =
     getCertificateRegistry(config);
 
-  const tx = await contract.issueCertificate(
-    String(certificateId).trim(),
-    certificateHash,
-    String(ipfsCid || "").trim(),
+  const tx = await sendWriteTransaction(
+    "issueCertificateOnChain",
+    () =>
+      contract.issueCertificate(
+        String(certificateId).trim(),
+        certificateHash,
+        String(ipfsCid || "").trim(),
+      ),
   );
-  const receipt = await tx.wait(1);
-  const network = await provider.getNetwork();
+  const receipt = await waitForWriteConfirmation("issueCertificateOnChain", tx);
 
   return {
     txHash: tx.hash,
     blockNumber: receipt.blockNumber,
     contractAddress: blockchainConfig.contractAddress,
-    chainId: Number(network.chainId),
+    chainId: blockchainConfig.chainId,
     issuerAddress: wallet.address,
   };
 }
@@ -133,17 +283,18 @@ async function anchorBatchOnChain({ batchId, batchRoot, config = {} }) {
     throw new Error("batchRoot must be a bytes32 hex string");
   }
 
-  const { contract, provider, wallet, config: blockchainConfig } =
+  const { contract, wallet, config: blockchainConfig } =
     getCertificateRegistry(config);
-  const tx = await contract.anchorBatch(String(batchId).trim(), batchRoot);
-  const receipt = await tx.wait(1);
-  const network = await provider.getNetwork();
+  const tx = await sendWriteTransaction("anchorBatchOnChain", () =>
+    contract.anchorBatch(String(batchId).trim(), batchRoot),
+  );
+  const receipt = await waitForWriteConfirmation("anchorBatchOnChain", tx);
 
   return {
     txHash: tx.hash,
     blockNumber: receipt.blockNumber,
     contractAddress: blockchainConfig.contractAddress,
-    chainId: Number(network.chainId),
+    chainId: blockchainConfig.chainId,
     issuerAddress: wallet.address,
   };
 }
@@ -175,17 +326,21 @@ async function revokeCertificateOnChain(certificateId, config = {}) {
     throw new Error("certificateId is required");
   }
 
-  const { contract, provider, wallet, config: blockchainConfig } =
+  const { contract, wallet, config: blockchainConfig } =
     getCertificateRegistry(config);
-  const tx = await contract.revokeCertificate(String(certificateId).trim());
-  const receipt = await tx.wait(1);
-  const network = await provider.getNetwork();
+  const tx = await sendWriteTransaction("revokeCertificateOnChain", () =>
+    contract.revokeCertificate(String(certificateId).trim()),
+  );
+  const receipt = await waitForWriteConfirmation(
+    "revokeCertificateOnChain",
+    tx,
+  );
 
   return {
     revokeTxHash: tx.hash,
     blockNumber: receipt.blockNumber,
     contractAddress: blockchainConfig.contractAddress,
-    chainId: Number(network.chainId),
+    chainId: blockchainConfig.chainId,
     revokedByAddress: wallet.address,
   };
 }

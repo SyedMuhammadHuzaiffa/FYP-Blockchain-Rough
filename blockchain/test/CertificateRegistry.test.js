@@ -70,7 +70,7 @@ describe("CertificateRegistry", function () {
       registry
         .connect(unauthorized)
         .issueCertificate(certificateId, certificateHash, ipfsCid),
-    ).to.be.revertedWith("Not authorized issuer");
+    ).to.be.revertedWithCustomError(registry, "NotAuthorizedIssuer");
   });
 
   it("authorized issuer can issue", async function () {
@@ -96,7 +96,7 @@ describe("CertificateRegistry", function () {
 
     await expect(
       registry.issueCertificate(certificateId, certificateHash, ipfsCid),
-    ).to.be.revertedWith("Already issued");
+    ).to.be.revertedWithCustomError(registry, "CertificateAlreadyIssued");
   });
 
   it("verify existing certificate returns correct fields", async function () {
@@ -144,9 +144,9 @@ describe("CertificateRegistry", function () {
     await issueDefaultCertificate();
     await registry.revokeCertificate(certificateId);
 
-    await expect(registry.revokeCertificate(certificateId)).to.be.revertedWith(
-      "Already revoked",
-    );
+    await expect(
+      registry.revokeCertificate(certificateId),
+    ).to.be.revertedWithCustomError(registry, "CertificateAlreadyRevoked");
   });
 
   it("unauthorized user cannot revoke", async function () {
@@ -154,25 +154,32 @@ describe("CertificateRegistry", function () {
 
     await expect(
       registry.connect(unauthorized).revokeCertificate(certificateId),
-    ).to.be.revertedWith("Not authorized issuer");
+    ).to.be.revertedWithCustomError(registry, "NotAuthorizedIssuer");
+  });
+
+  it("missing certificate revoke fails", async function () {
+    await expect(
+      registry.revokeCertificate("missing-cert"),
+    ).to.be.revertedWithCustomError(registry, "CertificateNotFound");
   });
 
   it("empty certificateId revoke fails", async function () {
-    await expect(registry.revokeCertificate("")).to.be.revertedWith(
-      "Empty certificateId",
+    await expect(registry.revokeCertificate("")).to.be.revertedWithCustomError(
+      registry,
+      "EmptyCertificateId",
     );
   });
 
   it("empty certificateId fails", async function () {
     await expect(
       registry.issueCertificate("", certificateHash, ipfsCid),
-    ).to.be.revertedWith("Empty certificateId");
+    ).to.be.revertedWithCustomError(registry, "EmptyCertificateId");
   });
 
   it("zero certificateHash fails", async function () {
     await expect(
       registry.issueCertificate(certificateId, ethers.ZeroHash, ipfsCid),
-    ).to.be.revertedWith("Empty certificateHash");
+    ).to.be.revertedWithCustomError(registry, "EmptyCertificateHash");
   });
 
   it("authorized issuer can anchor batch", async function () {
@@ -186,9 +193,9 @@ describe("CertificateRegistry", function () {
   it("duplicate batch anchor fails", async function () {
     await anchorDefaultBatch();
 
-    await expect(registry.anchorBatch(batchId, batchRoot)).to.be.revertedWith(
-      "Batch already anchored",
-    );
+    await expect(
+      registry.anchorBatch(batchId, batchRoot),
+    ).to.be.revertedWithCustomError(registry, "BatchAlreadyAnchored");
   });
 
   it("verify existing batch returns correct fields", async function () {
@@ -219,15 +226,15 @@ describe("CertificateRegistry", function () {
   it("unauthorized user cannot anchor batch", async function () {
     await expect(
       registry.connect(unauthorized).anchorBatch(batchId, batchRoot),
-    ).to.be.revertedWith("Not authorized issuer");
+    ).to.be.revertedWithCustomError(registry, "NotAuthorizedIssuer");
   });
 
   it("invalid batch fields fail", async function () {
-    await expect(registry.anchorBatch("", batchRoot)).to.be.revertedWith(
-      "Empty batchId",
-    );
-    await expect(registry.anchorBatch(batchId, ethers.ZeroHash)).to.be
-      .revertedWith("Empty batchRoot");
+    await expect(registry.anchorBatch("", batchRoot)).to.be
+      .revertedWithCustomError(registry, "EmptyBatchId");
+    await expect(
+      registry.anchorBatch(batchId, ethers.ZeroHash),
+    ).to.be.revertedWithCustomError(registry, "EmptyBatchRoot");
   });
 
   it("authorized issuer can revoke batch", async function () {
@@ -242,5 +249,29 @@ describe("CertificateRegistry", function () {
 
     expect(result.revoked).to.equal(true);
     expect(result.revokedAt).to.be.greaterThan(0n);
+  });
+
+  it("missing batch revoke fails", async function () {
+    await expect(
+      registry.revokeBatch("missing-batch"),
+    ).to.be.revertedWithCustomError(registry, "BatchNotFound");
+  });
+
+  it("duplicate batch revoke fails", async function () {
+    await anchorDefaultBatch();
+    await registry.revokeBatch(batchId);
+
+    await expect(registry.revokeBatch(batchId)).to.be.revertedWithCustomError(
+      registry,
+      "BatchAlreadyRevoked",
+    );
+  });
+
+  it("unauthorized user cannot revoke batch", async function () {
+    await anchorDefaultBatch();
+
+    await expect(
+      registry.connect(unauthorized).revokeBatch(batchId),
+    ).to.be.revertedWithCustomError(registry, "NotAuthorizedIssuer");
   });
 });
