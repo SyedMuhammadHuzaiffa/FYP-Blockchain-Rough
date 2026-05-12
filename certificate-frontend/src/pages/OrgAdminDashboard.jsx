@@ -1,14 +1,25 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { signOut } from "firebase/auth";
+import { Link } from "react-router-dom";
+import { QRCodeCanvas } from "qrcode.react";
 import { collection, doc, getDoc, getDocs, query, where } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
-import { auth, db, functions } from "../firebase";
+import { db, functions } from "../firebase";
+import AppLayout from "../components/AppLayout";
 
 const emptyTeacherForm = {
   name: "",
   email: "",
   password: "",
 };
+
+const emptyCertificateForm = {
+  studentName: "",
+  studentEmail: "",
+  courseName: "",
+  issueDate: "",
+};
+
+const AMOY_TX_BASE_URL = "https://amoy.polygonscan.com/tx/";
 
 function getReadableError(error) {
   if (error?.code === "functions/already-exists") {
@@ -34,15 +45,224 @@ function getReadableError(error) {
   return error?.message || "Something went wrong. Please try again.";
 }
 
+function getCertificateIdentifier(certificate) {
+  return certificate?.certificateId || certificate?.id || "";
+}
+
+function getVerifyLink(certificateId) {
+  return `${window.location.origin}/verify/${certificateId}`;
+}
+
+function getTxLink(txHash) {
+  return txHash ? `${AMOY_TX_BASE_URL}${txHash}` : "";
+}
+
+function truncateMiddle(value = "", visible = 10) {
+  if (!value || value.length <= visible * 2 + 3) return value;
+  return `${value.slice(0, visible)}...${value.slice(-visible)}`;
+}
+
+function getStatusBadge(status = "unknown") {
+  const normalized = status.toLowerCase();
+
+  if (["issued", "confirmed", "active"].includes(normalized)) {
+    return "badge badge-success";
+  }
+
+  if (["revoked", "failed", "disabled"].includes(normalized)) {
+    return "badge badge-error";
+  }
+
+  if (["pending", "processing"].includes(normalized)) {
+    return "badge badge-warning";
+  }
+
+  return "badge";
+}
+
+function CertificateTable({
+  certificates,
+  loading,
+  copiedCertificateId,
+  revokingCertificateId,
+  onRefresh,
+  onCopy,
+  onOpenQr,
+  onRevoke,
+}) {
+  return (
+    <section className="card">
+      <div className="section-header">
+        <div>
+          <h2>Issued Certificates</h2>
+          <p className="muted">Track Firestore status and blockchain proof.</p>
+        </div>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={loading}
+          className="button button-outline"
+        >
+          {loading ? "Refreshing..." : "Refresh"}
+        </button>
+      </div>
+
+      {loading ? <div className="alert">Loading certificates...</div> : null}
+
+      {!loading && certificates.length === 0 ? (
+        <div className="empty-state">
+          <strong>No certificates issued yet</strong>
+          <span>Newly issued certificates will appear here.</span>
+        </div>
+      ) : null}
+
+      {!loading && certificates.length > 0 ? (
+        <div className="table-container">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Certificate ID</th>
+                <th>Student</th>
+                <th>Course</th>
+                <th>Firestore</th>
+                <th>Blockchain</th>
+                <th>Verify</th>
+                <th>Revoke</th>
+              </tr>
+            </thead>
+            <tbody>
+              {certificates.map((certificate) => {
+                const certificateId = getCertificateIdentifier(certificate);
+                const isCopied = copiedCertificateId === certificateId;
+                const isRevoked = certificate.status === "revoked";
+                const isRevoking = revokingCertificateId === certificateId;
+
+                return (
+                  <tr key={certificate.id}>
+                    <td>
+                      <div className="hash-value">{certificateId}</div>
+                    </td>
+                    <td>
+                      <strong>{certificate.studentName || "-"}</strong>
+                      <p className="muted">{certificate.studentEmail || "-"}</p>
+                    </td>
+                    <td>
+                      <strong>{certificate.courseName || "-"}</strong>
+                      <p className="muted">{certificate.issueDate || "-"}</p>
+                    </td>
+                    <td>
+                      <span className={getStatusBadge(certificate.status)}>
+                        {certificate.status || "unknown"}
+                      </span>
+                    </td>
+                    <td>
+                      <div className="proof-cell">
+                        <span
+                          className={getStatusBadge(
+                            certificate.blockchainStatus || "pending",
+                          )}
+                        >
+                          {certificate.blockchainStatus || "pending"}
+                        </span>
+
+                        {certificate.blockchainTxHash ? (
+                          <a
+                            href={getTxLink(certificate.blockchainTxHash)}
+                            target="_blank"
+                            rel="noreferrer"
+                            title={certificate.blockchainTxHash}
+                          >
+                            Tx {truncateMiddle(certificate.blockchainTxHash)}
+                          </a>
+                        ) : null}
+
+                        {certificate.blockchainRevocationStatus ? (
+                          <span
+                            className={getStatusBadge(
+                              certificate.blockchainRevocationStatus,
+                            )}
+                          >
+                            Revocation {certificate.blockchainRevocationStatus}
+                          </span>
+                        ) : null}
+
+                        {certificate.revokeTxHash ? (
+                          <a
+                            href={getTxLink(certificate.revokeTxHash)}
+                            target="_blank"
+                            rel="noreferrer"
+                            title={certificate.revokeTxHash}
+                          >
+                            Revoke tx {truncateMiddle(certificate.revokeTxHash)}
+                          </a>
+                        ) : null}
+                      </div>
+                    </td>
+                    <td>
+                      <div className="action-group">
+                        <Link
+                          to={`/verify/${certificateId}`}
+                          className="button button-tonal button-small"
+                        >
+                          Open
+                        </Link>
+                        <button
+                          type="button"
+                          onClick={() => onCopy(certificate)}
+                          className="button button-outline button-small"
+                        >
+                          {isCopied ? "Copied" : "Copy"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onOpenQr(certificate)}
+                          className="button button-outline button-small"
+                        >
+                          QR
+                        </button>
+                      </div>
+                    </td>
+                    <td>
+                      {isRevoked ? (
+                        <span className="badge badge-error">Revoked</span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => onRevoke(certificate)}
+                          disabled={isRevoking}
+                          className="button button-danger button-small"
+                        >
+                          {isRevoking ? "Revoking..." : "Revoke"}
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 export default function OrgAdminDashboard({ user }) {
   const [profile, setProfile] = useState(null);
   const [organizationName, setOrganizationName] = useState("");
   const [teachers, setTeachers] = useState([]);
+  const [certificates, setCertificates] = useState([]);
   const [teacherForm, setTeacherForm] = useState(emptyTeacherForm);
+  const [certificateForm, setCertificateForm] = useState(emptyCertificateForm);
   const [pageLoading, setPageLoading] = useState(true);
   const [teachersLoading, setTeachersLoading] = useState(false);
+  const [certificatesLoading, setCertificatesLoading] = useState(false);
   const [creatingTeacher, setCreatingTeacher] = useState(false);
+  const [issuingCertificate, setIssuingCertificate] = useState(false);
   const [revokingTeacherId, setRevokingTeacherId] = useState("");
+  const [revokingCertificateId, setRevokingCertificateId] = useState("");
+  const [copiedCertificateId, setCopiedCertificateId] = useState("");
+  const [qrCertificate, setQrCertificate] = useState(null);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
@@ -54,14 +274,18 @@ export default function OrgAdminDashboard({ user }) {
     () => httpsCallable(functions, "revokeTeacher"),
     [],
   );
+  const issueCertificateFn = useMemo(
+    () => httpsCallable(functions, "issueCertificate"),
+    [],
+  );
+  const revokeCertificateFn = useMemo(
+    () => httpsCallable(functions, "revokeCertificate"),
+    [],
+  );
 
   const organizationId = profile?.organizationId || "";
   const isOrgAdmin = profile?.role === "orgAdmin";
   const isTeacher = profile?.role === "teacher";
-
-  const logout = async () => {
-    await signOut(auth);
-  };
 
   const fetchTeachers = useCallback(async (orgId) => {
     if (!orgId) {
@@ -91,6 +315,35 @@ export default function OrgAdminDashboard({ user }) {
       setError("Failed to load teachers for this organization.");
     } finally {
       setTeachersLoading(false);
+    }
+  }, []);
+
+  const fetchCertificates = useCallback(async (teacherUid) => {
+    if (!teacherUid) {
+      setCertificates([]);
+      return;
+    }
+
+    setCertificatesLoading(true);
+
+    try {
+      const certificatesQuery = query(
+        collection(db, "certificates"),
+        where("issuedBy", "==", teacherUid),
+      );
+      const certificatesSnap = await getDocs(certificatesQuery);
+
+      setCertificates(
+        certificatesSnap.docs.map((certificateDoc) => ({
+          id: certificateDoc.id,
+          ...certificateDoc.data(),
+        })),
+      );
+    } catch (err) {
+      console.error(err);
+      setError("Failed to load your issued certificates.");
+    } finally {
+      setCertificatesLoading(false);
     }
   }, []);
 
@@ -130,13 +383,17 @@ export default function OrgAdminDashboard({ user }) {
       if (profileData.role === "orgAdmin") {
         await fetchTeachers(profileData.organizationId);
       }
+
+      if (profileData.role === "teacher") {
+        await fetchCertificates(user.uid);
+      }
     } catch (err) {
       console.error(err);
       setError("Failed to load your dashboard profile.");
     } finally {
       setPageLoading(false);
     }
-  }, [fetchTeachers, user?.uid]);
+  }, [fetchCertificates, fetchTeachers, user?.uid]);
 
   useEffect(() => {
     fetchProfile();
@@ -147,6 +404,27 @@ export default function OrgAdminDashboard({ user }) {
       ...current,
       [field]: value,
     }));
+  };
+
+  const updateCertificateForm = (field, value) => {
+    setCertificateForm((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  };
+
+  const copyVerifyLink = async (certificate) => {
+    const currentCertificateId = getCertificateIdentifier(certificate);
+    const verifyLink = getVerifyLink(currentCertificateId);
+
+    try {
+      await navigator.clipboard.writeText(verifyLink);
+      setCopiedCertificateId(currentCertificateId);
+      window.setTimeout(() => setCopiedCertificateId(""), 2000);
+    } catch (err) {
+      console.error(err);
+      setError("Could not copy verify link. Please copy it from the link.");
+    }
   };
 
   const createTeacher = async (event) => {
@@ -217,241 +495,421 @@ export default function OrgAdminDashboard({ user }) {
     }
   };
 
+  const issueCertificate = async (event) => {
+    event.preventDefault();
+    setError("");
+    setSuccess("");
+
+    const studentName = certificateForm.studentName.trim();
+    const studentEmail = certificateForm.studentEmail.trim();
+    const courseName = certificateForm.courseName.trim();
+    const issueDate = certificateForm.issueDate.trim();
+
+    if (!studentName || !studentEmail || !courseName || !issueDate) {
+      setError(
+        "Student name, student email, course name, and issue date are required.",
+      );
+      return;
+    }
+
+    try {
+      setIssuingCertificate(true);
+      await user.getIdToken(true);
+
+      const result = await issueCertificateFn({
+        studentName,
+        studentEmail,
+        courseName,
+        issueDate,
+      });
+
+      setCertificateForm(emptyCertificateForm);
+      setSuccess(
+        `Certificate issued successfully. ID: ${result.data.certificateId}`,
+      );
+      await fetchCertificates(user.uid);
+    } catch (err) {
+      console.error(err);
+      setError(getReadableError(err));
+    } finally {
+      setIssuingCertificate(false);
+    }
+  };
+
+  const revokeCertificate = async (certificate) => {
+    const currentCertificateId = getCertificateIdentifier(certificate);
+
+    if (!currentCertificateId) {
+      setError("Certificate ID is missing.");
+      return;
+    }
+
+    const confirmRevoke = window.confirm(
+      `Revoke certificate ${currentCertificateId}?`,
+    );
+
+    if (!confirmRevoke) return;
+
+    setError("");
+    setSuccess("");
+
+    if (certificate?.blockchainStatus !== "confirmed") {
+      setError("Only blockchain-confirmed certificates can be revoked.");
+      return;
+    }
+
+    try {
+      setRevokingCertificateId(currentCertificateId);
+      await user.getIdToken(true);
+
+      const result = await revokeCertificateFn({
+        certificateId: currentCertificateId,
+      });
+      const revokeTxHash = result.data?.revokeTxHash;
+
+      setSuccess(
+        revokeTxHash
+          ? `Certificate revoked successfully. Revoke tx: ${revokeTxHash}`
+          : "Certificate revoked successfully.",
+      );
+      await fetchCertificates(user.uid);
+    } catch (err) {
+      console.error(err);
+      setError(getReadableError(err));
+      await fetchCertificates(user.uid);
+    } finally {
+      setRevokingCertificateId("");
+    }
+  };
+
+  const qrCertificateId = getCertificateIdentifier(qrCertificate);
+  const qrVerifyLink = qrCertificateId ? getVerifyLink(qrCertificateId) : "";
+
   if (pageLoading) {
-    return <h1 style={{ padding: 20 }}>Loading dashboard...</h1>;
+    return <div className="loading-screen">Loading dashboard...</div>;
   }
 
-  if (isTeacher) {
+  if (!isOrgAdmin && !isTeacher) {
     return (
-      <div style={{ padding: 20 }}>
-        <div style={styles.header}>
-          <div>
-            <h1>Teacher Dashboard</h1>
-            <p style={styles.muted}>Email: {profile?.email || user?.email}</p>
-            <p style={styles.muted}>
-              Organization: {organizationName || "Unknown Organization"}
-            </p>
-            <p style={styles.muted}>Status: {profile?.status || "unknown"}</p>
-          </div>
-
-          <button onClick={logout} style={styles.dangerButton}>
-            Logout
-          </button>
+      <AppLayout
+        user={user}
+        role={profile?.role}
+        title="Dashboard unavailable"
+        subtitle="This dashboard is only available to organization users."
+        navItems={[{ to: "/dashboard", label: "Dashboard", icon: "D" }]}
+      >
+        <div className="alert alert-error">
+          {error || "This dashboard is only available to organization users."}
         </div>
-
-        <div style={styles.panel}>
-          <h2>Access Granted</h2>
-          <p style={styles.muted}>
-            You are signed in as a teacher for your organization.
-          </p>
-        </div>
-      </div>
+      </AppLayout>
     );
   }
 
-  if (!isOrgAdmin) {
-    return (
-      <div style={{ padding: 20 }}>
-        <h1>Dashboard unavailable</h1>
-        <p>{error || "This dashboard is only available to organization users."}</p>
-        <button onClick={logout}>Logout</button>
-      </div>
-    );
-  }
+  const navItems = [
+    { to: "/dashboard", label: isTeacher ? "Teacher" : "Org Admin", icon: "D" },
+  ];
 
   return (
-    <div style={{ padding: 20 }}>
-      <div style={styles.header}>
-        <div>
-          <h1>Org Admin Dashboard</h1>
-          <p style={styles.muted}>Email: {profile?.email || user?.email}</p>
-          <p style={styles.muted}>
-            Organization: {organizationName || "Unknown Organization"}
-          </p>
+    <AppLayout
+      user={user}
+      role={profile?.role}
+      title={isTeacher ? "Teacher Dashboard" : "Org Admin Dashboard"}
+      subtitle={`${organizationName || "Unknown Organization"} · ${
+        profile?.email || user?.email
+      }`}
+      navItems={navItems}
+      actions={
+        <span className={getStatusBadge(profile?.status || "active")}>
+          {profile?.status || "active"}
+        </span>
+      }
+    >
+      <div className="grid">
+        <div className="grid grid-three">
+          <section className="card stat-card">
+            <span className="muted">Role</span>
+            <strong className="stat-value">
+              {isTeacher ? "Teacher" : "Org Admin"}
+            </strong>
+          </section>
+          <section className="card stat-card">
+            <span className="muted">
+              {isTeacher ? "Issued Certificates" : "Teachers"}
+            </span>
+            <strong className="stat-value">
+              {isTeacher ? certificates.length : teachers.length}
+            </strong>
+          </section>
+          <section className="card stat-card">
+            <span className="muted">Organization ID</span>
+            <strong className="hash-value">{organizationId || "-"}</strong>
+          </section>
         </div>
 
-        <button onClick={logout} style={styles.dangerButton}>
-          Logout
-        </button>
+        {error ? <div className="alert alert-error">{error}</div> : null}
+        {success ? <div className="alert alert-success">{success}</div> : null}
+
+        {isTeacher ? (
+          <>
+            <section className="card">
+              <div className="section-header">
+                <div>
+                  <h2>Issue Certificate</h2>
+                  <p className="muted">
+                    Create a certificate record and submit it for blockchain proof.
+                  </p>
+                </div>
+              </div>
+
+              <form className="form-grid" onSubmit={issueCertificate}>
+                <label className="field">
+                  <span>Student Name</span>
+                  <input
+                    className="input"
+                    placeholder="Student name"
+                    value={certificateForm.studentName}
+                    onChange={(event) =>
+                      updateCertificateForm("studentName", event.target.value)
+                    }
+                    disabled={issuingCertificate}
+                  />
+                </label>
+
+                <label className="field">
+                  <span>Student Email</span>
+                  <input
+                    className="input"
+                    placeholder="student@example.com"
+                    type="email"
+                    value={certificateForm.studentEmail}
+                    onChange={(event) =>
+                      updateCertificateForm("studentEmail", event.target.value)
+                    }
+                    disabled={issuingCertificate}
+                  />
+                </label>
+
+                <label className="field">
+                  <span>Course Name</span>
+                  <input
+                    className="input"
+                    placeholder="Course name"
+                    value={certificateForm.courseName}
+                    onChange={(event) =>
+                      updateCertificateForm("courseName", event.target.value)
+                    }
+                    disabled={issuingCertificate}
+                  />
+                </label>
+
+                <label className="field">
+                  <span>Issue Date</span>
+                  <input
+                    className="input"
+                    type="date"
+                    value={certificateForm.issueDate}
+                    onChange={(event) =>
+                      updateCertificateForm("issueDate", event.target.value)
+                    }
+                    disabled={issuingCertificate}
+                  />
+                </label>
+
+                <button
+                  type="submit"
+                  disabled={issuingCertificate}
+                  className="button full-width"
+                >
+                  {issuingCertificate ? "Issuing..." : "Issue Certificate"}
+                </button>
+              </form>
+            </section>
+
+            <CertificateTable
+              certificates={certificates}
+              loading={certificatesLoading}
+              copiedCertificateId={copiedCertificateId}
+              revokingCertificateId={revokingCertificateId}
+              onRefresh={() => fetchCertificates(user.uid)}
+              onCopy={copyVerifyLink}
+              onOpenQr={setQrCertificate}
+              onRevoke={revokeCertificate}
+            />
+          </>
+        ) : null}
+
+        {isOrgAdmin ? (
+          <>
+            <section className="card">
+              <div className="section-header">
+                <div>
+                  <h2>Create Teacher</h2>
+                  <p className="muted">
+                    Add a teacher to your organization and send their invite.
+                  </p>
+                </div>
+              </div>
+
+              <form className="form-grid" onSubmit={createTeacher}>
+                <label className="field">
+                  <span>Teacher Name</span>
+                  <input
+                    className="input"
+                    placeholder="Teacher name"
+                    value={teacherForm.name}
+                    onChange={(event) =>
+                      updateTeacherForm("name", event.target.value)
+                    }
+                    disabled={creatingTeacher}
+                  />
+                </label>
+
+                <label className="field">
+                  <span>Teacher Email</span>
+                  <input
+                    className="input"
+                    placeholder="teacher@example.com"
+                    type="email"
+                    value={teacherForm.email}
+                    onChange={(event) =>
+                      updateTeacherForm("email", event.target.value)
+                    }
+                    disabled={creatingTeacher}
+                  />
+                </label>
+
+                <label className="field full-width">
+                  <span>Temporary Password</span>
+                  <input
+                    className="input"
+                    placeholder="Minimum 6 characters"
+                    type="password"
+                    value={teacherForm.password}
+                    onChange={(event) =>
+                      updateTeacherForm("password", event.target.value)
+                    }
+                    disabled={creatingTeacher}
+                  />
+                </label>
+
+                <button
+                  type="submit"
+                  disabled={creatingTeacher}
+                  className="button full-width"
+                >
+                  {creatingTeacher ? "Creating..." : "Create Teacher"}
+                </button>
+              </form>
+            </section>
+
+            <section className="card">
+              <div className="section-header">
+                <div>
+                  <h2>Teachers</h2>
+                  <p className="muted">Manage teacher access for this organization.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => fetchTeachers(organizationId)}
+                  disabled={teachersLoading}
+                  className="button button-outline"
+                >
+                  {teachersLoading ? "Refreshing..." : "Refresh"}
+                </button>
+              </div>
+
+              {teachersLoading ? <div className="alert">Loading teachers...</div> : null}
+
+              {!teachersLoading && teachers.length === 0 ? (
+                <div className="empty-state">
+                  <strong>No active teachers found</strong>
+                  <span>Create a teacher account to start issuing certificates.</span>
+                </div>
+              ) : null}
+
+              {!teachersLoading && teachers.length > 0 ? (
+                <div className="table-container">
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>Name</th>
+                        <th>Email</th>
+                        <th>Status</th>
+                        <th>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {teachers.map((teacher) => (
+                        <tr key={teacher.id}>
+                          <td>{teacher.name || "-"}</td>
+                          <td>{teacher.email || "-"}</td>
+                          <td>
+                            <span className={getStatusBadge(teacher.status)}>
+                              {teacher.status || "unknown"}
+                            </span>
+                          </td>
+                          <td>
+                            <button
+                              type="button"
+                              onClick={() => revokeTeacher(teacher)}
+                              disabled={revokingTeacherId === teacher.id}
+                              className="button button-danger button-small"
+                            >
+                              {revokingTeacherId === teacher.id
+                                ? "Revoking..."
+                                : "Revoke"}
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
+            </section>
+          </>
+        ) : null}
       </div>
 
-      {error ? <div style={styles.error}>{error}</div> : null}
-      {success ? <div style={styles.success}>{success}</div> : null}
+      {qrCertificate ? (
+        <div className="modal-backdrop">
+          <section className="modal">
+            <div className="section-header">
+              <div>
+                <h2>Certificate QR</h2>
+                <p className="muted hash-value">ID: {qrCertificateId}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setQrCertificate(null)}
+                className="button button-tonal button-small"
+              >
+                Close
+              </button>
+            </div>
 
-      <div style={styles.panel}>
-        <h2>Create Teacher</h2>
+            <div className="qr-box">
+              <QRCodeCanvas value={qrVerifyLink} size={220} level="M" includeMargin />
+            </div>
 
-        <form onSubmit={createTeacher} style={styles.form}>
-          <input
-            placeholder="Teacher name"
-            value={teacherForm.name}
-            onChange={(event) => updateTeacherForm("name", event.target.value)}
-            disabled={creatingTeacher}
-            style={styles.input}
-          />
+            <a href={`/verify/${qrCertificateId}`} className="hash-value">
+              {qrVerifyLink}
+            </a>
 
-          <input
-            placeholder="Teacher email"
-            type="email"
-            value={teacherForm.email}
-            onChange={(event) => updateTeacherForm("email", event.target.value)}
-            disabled={creatingTeacher}
-            style={styles.input}
-          />
-
-          <input
-            placeholder="Temporary password"
-            type="password"
-            value={teacherForm.password}
-            onChange={(event) =>
-              updateTeacherForm("password", event.target.value)
-            }
-            disabled={creatingTeacher}
-            style={styles.input}
-          />
-
-          <button
-            type="submit"
-            disabled={creatingTeacher}
-            style={styles.primaryButton}
-          >
-            {creatingTeacher ? "Creating..." : "Create Teacher"}
-          </button>
-        </form>
-      </div>
-
-      <div style={styles.panel}>
-        <div style={styles.sectionHeader}>
-          <h2>Teachers</h2>
-          <button
-            onClick={() => fetchTeachers(organizationId)}
-            disabled={teachersLoading}
-            style={styles.secondaryButton}
-          >
-            {teachersLoading ? "Refreshing..." : "Refresh"}
-          </button>
+            <div className="button-row" style={{ marginTop: 16 }}>
+              <button
+                type="button"
+                onClick={() => copyVerifyLink(qrCertificate)}
+                className="button"
+              >
+                {copiedCertificateId === qrCertificateId
+                  ? "Copied"
+                  : "Copy Verification Link"}
+              </button>
+            </div>
+          </section>
         </div>
-
-        {teachersLoading ? <p>Loading teachers...</p> : null}
-
-        {!teachersLoading && teachers.length === 0 ? (
-          <p style={styles.muted}>No active teachers found for this organization.</p>
-        ) : null}
-
-        {!teachersLoading && teachers.length > 0 ? (
-          <table style={styles.table}>
-            <thead>
-              <tr>
-                <th style={styles.tableCell}>Name</th>
-                <th style={styles.tableCell}>Email</th>
-                <th style={styles.tableCell}>Status</th>
-                <th style={styles.tableCell}>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {teachers.map((teacher) => (
-                <tr key={teacher.id}>
-                  <td style={styles.tableCell}>{teacher.name || "-"}</td>
-                  <td style={styles.tableCell}>{teacher.email || "-"}</td>
-                  <td style={styles.tableCell}>{teacher.status || "unknown"}</td>
-                  <td style={styles.tableCell}>
-                    <button
-                      onClick={() => revokeTeacher(teacher)}
-                      disabled={revokingTeacherId === teacher.id}
-                      style={styles.dangerButton}
-                    >
-                      {revokingTeacherId === teacher.id ? "Revoking..." : "Revoke"}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        ) : null}
-      </div>
-    </div>
+      ) : null}
+    </AppLayout>
   );
 }
-
-const styles = {
-  header: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    gap: 16,
-    marginBottom: 20,
-  },
-  panel: {
-    border: "1px solid #ddd",
-    borderRadius: 8,
-    padding: 16,
-    marginBottom: 20,
-  },
-  form: {
-    display: "grid",
-    gap: 10,
-    maxWidth: 420,
-  },
-  input: {
-    padding: "10px 12px",
-    border: "1px solid #ccc",
-    borderRadius: 6,
-  },
-  primaryButton: {
-    background: "#0f172a",
-    color: "white",
-    border: "none",
-    padding: "10px 16px",
-    borderRadius: 6,
-    cursor: "pointer",
-  },
-  secondaryButton: {
-    background: "#f8fafc",
-    color: "#0f172a",
-    border: "1px solid #cbd5e1",
-    padding: "8px 12px",
-    borderRadius: 6,
-    cursor: "pointer",
-  },
-  dangerButton: {
-    background: "#dc2626",
-    color: "white",
-    border: "none",
-    padding: "8px 12px",
-    borderRadius: 6,
-    cursor: "pointer",
-  },
-  sectionHeader: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    gap: 16,
-  },
-  table: {
-    width: "100%",
-    borderCollapse: "collapse",
-  },
-  tableCell: {
-    borderBottom: "1px solid #e5e7eb",
-    padding: "10px 8px",
-    textAlign: "left",
-  },
-  muted: {
-    color: "#555",
-    margin: "4px 0",
-  },
-  error: {
-    background: "#fee2e2",
-    color: "#991b1b",
-    padding: 12,
-    borderRadius: 6,
-    marginBottom: 16,
-  },
-  success: {
-    background: "#dcfce7",
-    color: "#166534",
-    padding: 12,
-    borderRadius: 6,
-    marginBottom: 16,
-  },
-};

@@ -2,14 +2,11 @@ import Navbar from "../components/Navbar";
 
 export default function Dashboard({ user }) {
   return (
-    <div>
-      <Navbar user={user} />
-
-      <div style={{ padding: "20px" }}>
+    <Navbar user={user}>
+      <section className="card">
         <h1>Dashboard</h1>
-
-        <h3>Welcome {user?.email}</h3>
-      </div>
-    </div>
+        <p className="muted">Welcome {user?.email}</p>
+      </section>
+    </Navbar>
   );
 }

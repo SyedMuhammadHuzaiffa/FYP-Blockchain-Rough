@@ -1,21 +1,22 @@
-import { auth, db } from "./firebase";
+import { auth, db, functions } from "./firebase";
 import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   signOut
 } from "firebase/auth";
+import { httpsCallable } from "firebase/functions";
 
-import { doc, setDoc, getDoc } from "firebase/firestore";
+import { doc, getDoc } from "firebase/firestore";
 
 // REGISTER
-export const registerUser = async (email, password, role) => {
+export const registerUser = async (email, password, name = "") => {
   const userCred = await createUserWithEmailAndPassword(auth, email, password);
+  const createStudentProfile = httpsCallable(functions, "createStudentProfile");
 
-  await setDoc(doc(db, "users", userCred.user.uid), {
-    uid: userCred.user.uid,
-    email,
-    role,
-    createdAt: new Date()
+  await userCred.user.getIdToken(true);
+
+  await createStudentProfile({
+    name,
   });
 
   return userCred.user;

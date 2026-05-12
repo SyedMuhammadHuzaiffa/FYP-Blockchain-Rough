@@ -2,7 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { useEffect, useState } from "react";
 
 import { onAuthStateChanged } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
+import { doc, onSnapshot } from "firebase/firestore";
 
 import { auth, db } from "./firebase";
 
@@ -12,11 +12,10 @@ import SuperAdmin from "./pages/SuperAdmin";
 import Dashboard from "./pages/Dashboard";
 import StudentDashboard from "./pages/StudentDashboard";
 import OrgAdminDashboard from "./pages/OrgAdminDashboard";
-
-// ✅ ADD THIS (your test page)
-import TestAdmin from "./pages/TestAdmin";
+import VerifyCertificate from "./pages/VerifyCertificate";
 
 import ProtectedRoute from "./components/ProtectedRoute";
+import { ThemeProvider } from "./components/ThemeProvider";
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -24,97 +23,121 @@ export default function App() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+    let unsubscribeProfile = null;
+
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setLoading(true);
+
+      if (unsubscribeProfile) {
+        unsubscribeProfile();
+        unsubscribeProfile = null;
+      }
+
       if (currentUser) {
         setUser(currentUser);
 
         const docRef = doc(db, "users", currentUser.uid);
-        const docSnap = await getDoc(docRef);
 
-        if (docSnap.exists()) {
-          setRole(docSnap.data().role || "");
-        } else {
-          setRole("");
-        }
+        unsubscribeProfile = onSnapshot(
+          docRef,
+          (docSnap) => {
+            setRole(docSnap.exists() ? docSnap.data().role || "" : "");
+            setLoading(false);
+          },
+          (error) => {
+            console.error("Failed to load user profile:", error);
+            setRole("");
+            setLoading(false);
+          },
+        );
       } else {
         setUser(null);
         setRole("");
+        setLoading(false);
       }
-
-      setLoading(false);
     });
 
-    return () => unsubscribe();
+    return () => {
+      unsubscribe();
+
+      if (unsubscribeProfile) {
+        unsubscribeProfile();
+      }
+    };
   }, []);
 
-  if (loading) return <h1>Loading...</h1>;
+  if (loading) {
+    return <div className="loading-screen">Loading application...</div>;
+  }
 
   return (
-    <BrowserRouter>
-      <Routes>
-        {/* PUBLIC */}
-        <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
+    <ThemeProvider>
+      <BrowserRouter>
+        <Routes>
+          {/* PUBLIC */}
+          <Route path="/login" element={<Login />} />
+          <Route path="/register" element={<Register />} />
+          <Route path="/verify/:certificateId" element={<VerifyCertificate />} />
 
-        {/* 🔥 TEMP TEST ROUTE (NO PROTECTION) */}
-        <Route path="/test-admin" element={<TestAdmin />} />
+          {/* SUPER ADMIN */}
+          <Route
+            path="/admin"
+            element={
+              <ProtectedRoute
+                user={user}
+                role={role}
+                allowedRoles={["superadmin"]}
+              >
+                <SuperAdmin user={user} role={role} />
+              </ProtectedRoute>
+            }
+          />
 
-        {/* SUPER ADMIN */}
-        <Route
-          path="/admin"
-          element={
-            <ProtectedRoute
-              user={user}
-              role={role}
-              allowedRoles={["superadmin"]}
-            >
-              <SuperAdmin user={user} />
-            </ProtectedRoute>
-          }
-        />
+          {/* TEACHER / ORG ADMIN */}
+          <Route
+            path="/dashboard"
+            element={
+              <ProtectedRoute
+                user={user}
+                role={role}
+                allowedRoles={["teacher", "orgAdmin"]}
+              >
+                <OrgAdminDashboard user={user} />
+              </ProtectedRoute>
+            }
+          />
 
-        {/* TEACHER / ORG ADMIN */}
-        <Route
-          path="/dashboard"
-          element={
-            <ProtectedRoute
-              user={user}
-              role={role}
-              allowedRoles={["teacher", "orgAdmin"]}
-            >
-              <OrgAdminDashboard user={user} />
-            </ProtectedRoute>
-          }
-        />
+          {/* STUDENT */}
+          <Route
+            path="/student"
+            element={
+              <ProtectedRoute user={user} role={role} allowedRoles={["student"]}>
+                <StudentDashboard user={user} role={role} />
+              </ProtectedRoute>
+            }
+          />
 
-        {/* STUDENT */}
-        <Route
-          path="/student"
-          element={
-            <ProtectedRoute user={user} role={role} allowedRoles={["student"]}>
-              <StudentDashboard user={user} />
-            </ProtectedRoute>
-          }
-        />
-
-        {/* DEFAULT ROUTE */}
-        <Route
-          path="/"
-          element={
-            user ? (
-              role === "superadmin" ? (
-                <Navigate to="/admin" />
-              ) : role === "teacher" || role === "orgAdmin" ? (
-                <Navigate to="/dashboard" />
+          {/* DEFAULT ROUTE */}
+          <Route
+            path="/"
+            element={
+              user ? (
+                role === "superadmin" ? (
+                  <Navigate to="/admin" />
+                ) : role === "teacher" || role === "orgAdmin" ? (
+                  <Navigate to="/dashboard" />
+                ) : (
+                  <Navigate to="/student" />
+                )
               ) : (
-                <Navigate to="/student" />
+                <Navigate to="/login" />
               )
-            ) : (
-              <Navigate to="/login" />
-            )
-          }
-        />
-      </Routes>
-    </BrowserRouter>
+            }
+          />
+
+          <Route path="*" element={<Navigate to="/" />} />
+        </Routes>
+      </BrowserRouter>
+    </ThemeProvider>
   );
 }

@@ -1,0 +1,18 @@
+{
+  "name": "certificate-registry-blockchain",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Hardhat module for the Blockchain Certificate Verification System smart contracts.",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-chai-matchers": "^2.0.8",
+    "@nomicfoundation/hardhat-ethers": "^3.0.8",
+    "chai": "^4.3.10",
+    "dotenv": "^16.4.7",
+    "ethers": "^6.13.5",
+    "hardhat": "^2.22.18"
+  }
+}

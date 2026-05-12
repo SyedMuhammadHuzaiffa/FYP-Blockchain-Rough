@@ -1,6 +1,14 @@
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 const sgMail = require("@sendgrid/mail");
+const {
+  computeCertificateHash,
+} = require("./blockchain/certificateHash");
+const {
+  anchorCertificateOnChain,
+  revokeCertificateOnChain,
+} = require("./blockchain/certificateRegistry");
 
 if (admin.apps.length === 0) {
   admin.initializeApp();
@@ -10,6 +18,12 @@ const db = admin.firestore();
 const REGION = "us-central1";
 const FROM_EMAIL = "syed.huzaiffaxd@gmail.com";
 const FROM_NAME = "Blockchain Certificate System";
+const BLOCKCHAIN_RPC_URL = defineSecret("BLOCKCHAIN_RPC_URL");
+const BLOCKCHAIN_PRIVATE_KEY = defineSecret("BLOCKCHAIN_PRIVATE_KEY");
+const CERTIFICATE_REGISTRY_ADDRESS = defineSecret(
+  "CERTIFICATE_REGISTRY_ADDRESS",
+);
+const BLOCKCHAIN_CHAIN_ID = defineSecret("BLOCKCHAIN_CHAIN_ID");
 
 // =============================
 // HELPERS
@@ -103,6 +117,46 @@ async function requireOrgAdmin(request) {
   };
 }
 
+async function requireActiveTeacher(request) {
+  const auth = request.auth;
+
+  if (!auth) {
+    throw new HttpsError("unauthenticated", "User must be logged in");
+  }
+
+  const callerUid = auth.uid;
+  const callerDoc = await db.collection("users").doc(callerUid).get();
+
+  if (!callerDoc.exists) {
+    throw new HttpsError(
+      "permission-denied",
+      "User profile missing in Firestore",
+    );
+  }
+
+  const callerData = callerDoc.data();
+
+  if (callerData?.role !== "teacher" || callerData?.status !== "active") {
+    throw new HttpsError(
+      "permission-denied",
+      "Only active teachers can issue or revoke certificates",
+    );
+  }
+
+  if (!callerData?.organizationId) {
+    throw new HttpsError(
+      "failed-precondition",
+      "Teacher is not assigned to an organization",
+    );
+  }
+
+  return {
+    uid: callerUid,
+    email: callerData.email || auth.token?.email || null,
+    organizationId: callerData.organizationId,
+  };
+}
+
 function normalizeEmail(email) {
   return String(email || "")
     .trim()
@@ -125,6 +179,124 @@ function addAdminLog(batch, payload) {
     createdAt: timestamp(),
   });
 }
+
+function getBlockchainConfig() {
+  return {
+    rpcUrl: BLOCKCHAIN_RPC_URL.value(),
+    privateKey: BLOCKCHAIN_PRIVATE_KEY.value(),
+    contractAddress: CERTIFICATE_REGISTRY_ADDRESS.value(),
+    chainId: BLOCKCHAIN_CHAIN_ID.value(),
+  };
+}
+
+function getErrorMessage(error) {
+  const message =
+    error?.shortMessage || error?.reason || error?.message || String(error);
+
+  return message.length > 1000 ? `${message.slice(0, 1000)}...` : message;
+}
+
+// =============================
+// CREATE STUDENT PROFILE
+// =============================
+exports.createStudentProfile = onCall(
+  {
+    region: REGION,
+    cors: true,
+    invoker: "public",
+  },
+  async (request) => {
+    try {
+      if (!request.auth) {
+        throw new HttpsError(
+          "unauthenticated",
+          "User must be logged in to create a student profile",
+        );
+      }
+
+      const uid = request.auth.uid;
+      const { name } = request.data ?? {};
+      const normalizedName = cleanName(name);
+      const authUser = await admin.auth().getUser(uid);
+      const normalizedEmail = normalizeEmail(
+        authUser.email || request.auth.token?.email,
+      );
+
+      if (!normalizedEmail) {
+        throw new HttpsError(
+          "failed-precondition",
+          "Authenticated user email is missing",
+        );
+      }
+
+      const userRef = db.collection("users").doc(uid);
+      const userDoc = await userRef.get();
+
+      if (userDoc.exists) {
+        const existingData = userDoc.data();
+
+        if (existingData?.role && existingData.role !== "student") {
+          throw new HttpsError(
+            "failed-precondition",
+            "A non-student profile already exists for this account",
+          );
+        }
+      }
+
+      const profile = {
+        uid,
+        email: normalizedEmail,
+        role: "student",
+        status: "active",
+        updatedAt: timestamp(),
+      };
+
+      if (normalizedName) {
+        profile.name = normalizedName;
+      }
+
+      if (!userDoc.exists) {
+        profile.createdAt = timestamp();
+      }
+
+      const batch = db.batch();
+
+      batch.set(userRef, profile, { merge: true });
+
+      if (!userDoc.exists) {
+        addAdminLog(batch, {
+          action: "CREATE_STUDENT_PROFILE",
+          performedBy: uid,
+          performedByEmail: normalizedEmail,
+          targetUser: uid,
+          targetEmail: normalizedEmail,
+          metadata: {
+            source: "public_registration",
+          },
+        });
+      }
+
+      await batch.commit();
+
+      return {
+        success: true,
+        uid,
+        email: normalizedEmail,
+        role: "student",
+        status: "active",
+      };
+    } catch (error) {
+      console.error("createStudentProfile error:", error);
+
+      if (error instanceof HttpsError) throw error;
+
+      throw new HttpsError(
+        "internal",
+        "Server error while creating student profile",
+      );
+    }
+  },
+);
 
 async function sendOrgAdminInviteEmail({
   to,
@@ -817,6 +989,295 @@ exports.revokeTeacher = onCall(
       if (error instanceof HttpsError) throw error;
 
       throw new HttpsError("internal", "Server error while revoking teacher");
+    }
+  },
+);
+
+// =============================
+// ISSUE CERTIFICATE
+// =============================
+exports.issueCertificate = onCall(
+  {
+    region: REGION,
+    cors: true,
+    invoker: "public",
+    secrets: [
+      BLOCKCHAIN_RPC_URL,
+      BLOCKCHAIN_PRIVATE_KEY,
+      CERTIFICATE_REGISTRY_ADDRESS,
+      BLOCKCHAIN_CHAIN_ID,
+    ],
+  },
+  async (request) => {
+    try {
+      const caller = await requireActiveTeacher(request);
+      const { studentName, studentEmail, courseName, issueDate } =
+        request.data ?? {};
+
+      if (
+        typeof studentName !== "string" ||
+        typeof studentEmail !== "string" ||
+        typeof courseName !== "string" ||
+        typeof issueDate !== "string" ||
+        !studentName.trim() ||
+        !studentEmail.trim() ||
+        !courseName.trim() ||
+        !issueDate.trim()
+      ) {
+        throw new HttpsError(
+          "invalid-argument",
+          "studentName, studentEmail, courseName, and issueDate are required",
+        );
+      }
+
+      const normalizedStudentName = studentName.trim();
+      const normalizedStudentEmail = normalizeEmail(studentEmail);
+      const normalizedCourseName = courseName.trim();
+      const normalizedIssueDate = issueDate.trim();
+
+      if (!normalizedStudentEmail.includes("@")) {
+        throw new HttpsError(
+          "invalid-argument",
+          "A valid student email is required",
+        );
+      }
+
+      const certificateRef = db.collection("certificates").doc();
+      const certificateId = certificateRef.id;
+      const certificateData = {
+        certificateId,
+        studentName: normalizedStudentName,
+        studentEmail: normalizedStudentEmail,
+        courseName: normalizedCourseName,
+        issueDate: normalizedIssueDate,
+        organizationId: caller.organizationId,
+        issuedBy: caller.uid,
+        issuedByEmail: caller.email,
+      };
+      const certificateHash = computeCertificateHash(certificateData);
+      const batch = db.batch();
+
+      batch.set(certificateRef, {
+        ...certificateData,
+        status: "issued",
+        blockchainStatus: "pending",
+        ipfsStatus: "pending",
+        createdAt: timestamp(),
+        updatedAt: timestamp(),
+      });
+
+      addAdminLog(batch, {
+        action: "ISSUE_CERTIFICATE",
+        performedBy: caller.uid,
+        performedByEmail: caller.email,
+        targetEmail: normalizedStudentEmail,
+        orgId: caller.organizationId,
+        certificateId,
+      });
+
+      await batch.commit();
+
+      let blockchainStatus = "pending";
+      let blockchainError = null;
+
+      try {
+        const anchorResult = await anchorCertificateOnChain({
+          certificateId,
+          certificateHash,
+          ipfsCid: "",
+          config: getBlockchainConfig(),
+        });
+        const successBatch = db.batch();
+
+        successBatch.update(certificateRef, {
+          certificateHash,
+          blockchainStatus: "confirmed",
+          blockchainTxHash: anchorResult.txHash,
+          blockchainChainId: anchorResult.chainId,
+          contractAddress: anchorResult.contractAddress,
+          blockNumber: anchorResult.blockNumber,
+          blockchainIssuedAt: timestamp(),
+          blockchainIssuerAddress: anchorResult.issuerAddress,
+          blockchainError: null,
+          updatedAt: timestamp(),
+        });
+
+        addAdminLog(successBatch, {
+          action: "ANCHOR_CERTIFICATE_SUCCESS",
+          performedBy: caller.uid,
+          performedByEmail: caller.email,
+          targetEmail: normalizedStudentEmail,
+          orgId: caller.organizationId,
+          certificateId,
+          txHash: anchorResult.txHash,
+          contractAddress: anchorResult.contractAddress,
+          chainId: anchorResult.chainId,
+          blockNumber: anchorResult.blockNumber,
+        });
+
+        await successBatch.commit();
+        blockchainStatus = "confirmed";
+      } catch (anchorError) {
+        blockchainStatus = "failed";
+        blockchainError = getErrorMessage(anchorError);
+        console.error("anchorCertificateOnChain error:", anchorError);
+
+        const failureBatch = db.batch();
+
+        failureBatch.update(certificateRef, {
+          certificateHash,
+          blockchainStatus,
+          blockchainError,
+          updatedAt: timestamp(),
+        });
+
+        addAdminLog(failureBatch, {
+          action: "ANCHOR_CERTIFICATE_FAILED",
+          performedBy: caller.uid,
+          performedByEmail: caller.email,
+          targetEmail: normalizedStudentEmail,
+          orgId: caller.organizationId,
+          certificateId,
+          error: blockchainError,
+        });
+
+        await failureBatch.commit();
+      }
+
+      return {
+        success: true,
+        certificateId,
+        certificateHash,
+        blockchainStatus,
+        blockchainError,
+        message: "Certificate issued successfully",
+      };
+    } catch (error) {
+      console.error("issueCertificate error:", error);
+
+      if (error instanceof HttpsError) throw error;
+
+      throw new HttpsError("internal", "Server error while issuing certificate");
+    }
+  },
+);
+
+// =============================
+// REVOKE CERTIFICATE
+// =============================
+exports.revokeCertificate = onCall(
+  {
+    region: REGION,
+    cors: true,
+    invoker: "public",
+    secrets: [
+      BLOCKCHAIN_RPC_URL,
+      BLOCKCHAIN_PRIVATE_KEY,
+      CERTIFICATE_REGISTRY_ADDRESS,
+      BLOCKCHAIN_CHAIN_ID,
+    ],
+  },
+  async (request) => {
+    const caller = await requireActiveTeacher(request);
+    const certificateId = String(request.data?.certificateId || "").trim();
+
+    if (!certificateId) {
+      throw new HttpsError(
+        "invalid-argument",
+        "certificateId is required",
+      );
+    }
+
+    const certificateRef = db.collection("certificates").doc(certificateId);
+    const certificateSnap = await certificateRef.get();
+
+    if (!certificateSnap.exists) {
+      throw new HttpsError("not-found", "Certificate not found");
+    }
+
+    const certificate = certificateSnap.data();
+
+    if (certificate?.status === "revoked") {
+      throw new HttpsError(
+        "failed-precondition",
+        "Certificate is already revoked",
+      );
+    }
+
+    if (certificate?.blockchainStatus !== "confirmed") {
+      throw new HttpsError(
+        "failed-precondition",
+        "Only blockchain-confirmed certificates can be revoked.",
+      );
+    }
+
+    const issuedByCaller = certificate?.issuedBy === caller.uid;
+    const inCallerOrganization =
+      certificate?.organizationId === caller.organizationId;
+
+    if (!issuedByCaller && !inCallerOrganization) {
+      throw new HttpsError(
+        "permission-denied",
+        "You can only revoke certificates you issued or certificates in your organization",
+      );
+    }
+
+    try {
+      const revokeResult = await revokeCertificateOnChain(certificateId, {
+        ...getBlockchainConfig(),
+      });
+      const batch = db.batch();
+
+      batch.update(certificateRef, {
+        status: "revoked",
+        revokedAt: timestamp(),
+        revokedBy: caller.uid,
+        blockchainRevocationStatus: "confirmed",
+        blockchainRevocationError: null,
+        revokeTxHash: revokeResult.revokeTxHash,
+        revokeBlockNumber: revokeResult.blockNumber,
+        blockchainRevokedAt: timestamp(),
+        blockchainRevokedByAddress: revokeResult.revokedByAddress,
+        updatedAt: timestamp(),
+      });
+
+      addAdminLog(batch, {
+        action: "REVOKE_CERTIFICATE",
+        performedBy: caller.uid,
+        performedByEmail: caller.email,
+        targetEmail: certificate?.studentEmail || null,
+        orgId: certificate?.organizationId || caller.organizationId,
+        certificateId,
+        revokeTxHash: revokeResult.revokeTxHash,
+      });
+
+      await batch.commit();
+
+      return {
+        success: true,
+        certificateId,
+        revokeTxHash: revokeResult.revokeTxHash,
+        blockNumber: revokeResult.blockNumber,
+        contractAddress: revokeResult.contractAddress,
+        chainId: revokeResult.chainId,
+        revokedByAddress: revokeResult.revokedByAddress,
+        message: "Certificate revoked successfully",
+      };
+    } catch (error) {
+      const blockchainRevocationError = getErrorMessage(error);
+
+      console.error("revokeCertificateOnChain error:", error);
+
+      await certificateRef.update({
+        blockchainRevocationStatus: "failed",
+        blockchainRevocationError,
+        updatedAt: timestamp(),
+      });
+
+      throw new HttpsError(
+        "internal",
+        `Blockchain revocation failed: ${blockchainRevocationError}`,
+      );
     }
   },
 );

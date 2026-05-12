@@ -1,31 +1,36 @@
-import { useEffect, useState } from "react";
-import { db, functions, auth } from "../firebase";
-
+import { useEffect, useMemo, useState } from "react";
 import { collection, getDocs } from "firebase/firestore";
-
 import { httpsCallable } from "firebase/functions";
-import { signOut } from "firebase/auth";
+import { db, functions } from "../firebase";
+import AppLayout from "../components/AppLayout";
 
-export default function SuperAdmin() {
+export default function SuperAdmin({ user, role = "superadmin" }) {
   const [orgName, setOrgName] = useState("");
   const [organizations, setOrganizations] = useState([]);
   const [users, setUsers] = useState([]);
   const [orgAdminForm, setOrgAdminForm] = useState({});
   const [loading, setLoading] = useState(false);
+  const [fetching, setFetching] = useState(true);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
 
-  // =========================
-  // CLOUD FUNCTIONS
-  // =========================
-  const createOrganizationFn = httpsCallable(functions, "createOrganization");
+  const createOrganizationFn = useMemo(
+    () => httpsCallable(functions, "createOrganization"),
+    [],
+  );
+  const createOrgAdminFn = useMemo(
+    () => httpsCallable(functions, "createOrgAdmin"),
+    [],
+  );
+  const revokeOrgAdminFn = useMemo(
+    () => httpsCallable(functions, "revokeOrgAdmin"),
+    [],
+  );
 
-  const createOrgAdminFn = httpsCallable(functions, "createOrgAdmin");
-
-  const revokeOrgAdminFn = httpsCallable(functions, "revokeOrgAdmin");
-
-  // =========================
-  // FETCH DATA
-  // =========================
   const fetchData = async () => {
+    setFetching(true);
+    setError("");
+
     try {
       const orgSnap = await getDocs(collection(db, "organizations"));
       const userSnap = await getDocs(collection(db, "users"));
@@ -45,7 +50,9 @@ export default function SuperAdmin() {
       );
     } catch (err) {
       console.error(err);
-      alert("Failed to fetch data");
+      setError("Failed to fetch admin data.");
+    } finally {
+      setFetching(false);
     }
   };
 
@@ -53,26 +60,14 @@ export default function SuperAdmin() {
     fetchData();
   }, []);
 
-  // =========================
-  // LOGOUT
-  // =========================
-  const logout = async () => {
-    try {
-      await signOut(auth);
+  const createOrg = async (event) => {
+    event.preventDefault();
+    setError("");
+    setSuccess("");
 
-      alert("Logged out successfully");
-    } catch (err) {
-      console.error(err);
-      alert(err.message);
-    }
-  };
-
-  // =========================
-  // CREATE ORGANIZATION
-  // =========================
-  const createOrg = async () => {
     if (!orgName.trim()) {
-      return alert("Enter organization name");
+      setError("Enter an organization name.");
+      return;
     }
 
     try {
@@ -82,36 +77,34 @@ export default function SuperAdmin() {
         name: orgName.trim(),
       });
 
-      alert("Organization created successfully");
-
+      setSuccess("Organization created successfully.");
       setOrgName("");
-
       await fetchData();
     } catch (err) {
       console.error(err);
-
-      alert(err.message);
+      setError(err.message || "Unable to create organization.");
     } finally {
       setLoading(false);
     }
   };
 
-  // =========================
-  // CREATE ORG ADMIN
-  // =========================
   const createOrgAdmin = async (orgId) => {
     const form = orgAdminForm[orgId] || {};
-
     const name = form.name || "";
     const email = form.email || "";
     const password = form.password || "";
 
+    setError("");
+    setSuccess("");
+
     if (!email.trim()) {
-      return alert("Enter admin email");
+      setError("Enter admin email.");
+      return;
     }
 
     if (!password.trim()) {
-      return alert("Enter password");
+      setError("Enter a temporary password.");
+      return;
     }
 
     try {
@@ -124,9 +117,7 @@ export default function SuperAdmin() {
         orgId,
       });
 
-      alert("Org admin created successfully");
-
-      // reset form
+      setSuccess("Org admin created successfully.");
       setOrgAdminForm((prev) => ({
         ...prev,
         [orgId]: {
@@ -141,26 +132,26 @@ export default function SuperAdmin() {
       console.error(err);
 
       if (err.code === "functions/already-exists") {
-        alert("A user with this email already exists.");
+        setError("A user with this email already exists.");
       } else if (err.code === "functions/permission-denied") {
-        alert("Only superadmin can perform this action.");
+        setError("Only superadmin can perform this action.");
       } else {
-        alert(err.message);
+        setError(err.message || "Unable to create org admin.");
       }
     } finally {
       setLoading(false);
     }
   };
 
-  // =========================
-  // REVOKE ORG ADMIN
-  // =========================
   const removeOrgAdmin = async (orgId, uid) => {
     const confirmRevoke = window.confirm(
       "Are you sure you want to revoke this org admin?",
     );
 
     if (!confirmRevoke) return;
+
+    setError("");
+    setSuccess("");
 
     try {
       setLoading(true);
@@ -170,223 +161,239 @@ export default function SuperAdmin() {
         orgId,
       });
 
-      alert("Org admin revoked successfully");
-
+      setSuccess("Org admin revoked successfully.");
       await fetchData();
     } catch (err) {
       console.error(err);
-
-      alert(err.message);
+      setError(err.message || "Unable to revoke org admin.");
     } finally {
       setLoading(false);
     }
   };
 
-  // =========================
-  // HELPERS
-  // =========================
   const getUserById = (uid) => {
     return users.find((u) => u.id === uid || u.uid === uid);
   };
 
   const getUserLabel = (uid) => {
-    const user = getUserById(uid);
+    const profile = getUserById(uid);
 
-    if (!user) return uid;
-
-    if (user.name && user.email) {
-      return `${user.name} (${user.email})`;
-    }
-
-    if (user.email) return user.email;
-
-    if (user.name) return user.name;
+    if (!profile) return uid;
+    if (profile.name && profile.email) return `${profile.name} (${profile.email})`;
+    if (profile.email) return profile.email;
+    if (profile.name) return profile.name;
 
     return uid;
   };
 
-  // =========================
-  // UI
-  // =========================
+  const updateOrgAdminForm = (orgId, field, value) => {
+    setOrgAdminForm((prev) => ({
+      ...prev,
+      [orgId]: {
+        ...prev[orgId],
+        [field]: value,
+      },
+    }));
+  };
+
   return (
-    <div style={{ padding: 20 }}>
-      {/* HEADER */}
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: 20,
-        }}
-      >
-        <h1>Super Admin Panel</h1>
-
+    <AppLayout
+      user={user}
+      role={role}
+      title="Super Admin Panel"
+      subtitle="Manage organizations and assign organization administrators."
+      navItems={[
+        { to: "/admin", label: "Organizations", icon: "O" },
+      ]}
+      actions={
         <button
-          onClick={logout}
-          style={{
-            background: "red",
-            color: "white",
-            border: "none",
-            padding: "10px 16px",
-            borderRadius: 6,
-            cursor: "pointer",
-          }}
+          type="button"
+          className="button button-outline"
+          onClick={fetchData}
+          disabled={fetching}
         >
-          Logout
+          {fetching ? "Refreshing..." : "Refresh"}
         </button>
-      </div>
+      }
+    >
+      <div className="grid">
+        <div className="grid grid-three">
+          <section className="card stat-card">
+            <span className="muted">Organizations</span>
+            <strong className="stat-value">{organizations.length}</strong>
+          </section>
+          <section className="card stat-card">
+            <span className="muted">Org Admins</span>
+            <strong className="stat-value">
+              {users.filter((item) => item.role === "orgAdmin").length}
+            </strong>
+          </section>
+          <section className="card stat-card">
+            <span className="muted">Users</span>
+            <strong className="stat-value">{users.length}</strong>
+          </section>
+        </div>
 
-      {/* CREATE ORGANIZATION */}
-      <div
-        style={{
-          marginBottom: 30,
-          padding: 20,
-          border: "1px solid #ccc",
-          borderRadius: 8,
-        }}
-      >
-        <h3>Create Organization</h3>
+        {error ? <div className="alert alert-error">{error}</div> : null}
+        {success ? <div className="alert alert-success">{success}</div> : null}
 
-        <input
-          placeholder="Organization Name"
-          value={orgName}
-          onChange={(e) => setOrgName(e.target.value)}
-          style={{
-            marginRight: 10,
-            padding: 8,
-            width: 250,
-          }}
-        />
-
-        <button onClick={createOrg} disabled={loading}>
-          {loading ? "Creating..." : "Create Org"}
-        </button>
-      </div>
-
-      <hr />
-
-      {/* ORGANIZATIONS */}
-      <h2>Organizations</h2>
-
-      {organizations.length === 0 && <p>No organizations found.</p>}
-
-      {organizations.map((org) => (
-        <div
-          key={org.id}
-          style={{
-            marginBottom: 40,
-            padding: 20,
-            border: "1px solid #ccc",
-            borderRadius: 8,
-          }}
-        >
-          <h2>{org.name}</h2>
-
-          <p>
-            <strong>Org ID:</strong> {org.id}
-          </p>
-
-          <p>
-            <strong>Created By:</strong>{" "}
-            {getUserLabel(org.createdBy) || "Unknown"}
-          </p>
-
-          {/* ADMINS */}
-          <h4>Org Admins</h4>
-
-          {org.orgAdminIds?.length > 0 ? (
-            org.orgAdminIds.map((uid) => (
-              <div
-                key={uid}
-                style={{
-                  marginBottom: 10,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                }}
-              >
-                <span>👤 {getUserLabel(uid)}</span>
-
-                <button
-                  onClick={() => removeOrgAdmin(org.id, uid)}
-                  disabled={loading}
-                >
-                  {loading ? "Processing..." : "Revoke"}
-                </button>
-              </div>
-            ))
-          ) : (
-            <p>No org admins assigned</p>
-          )}
-
-          {/* ADD ORG ADMIN */}
-          <div
-            style={{
-              marginTop: 20,
-              paddingTop: 20,
-              borderTop: "1px solid #eee",
-            }}
-          >
-            <h4>Add Org Admin</h4>
-
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: 10,
-                maxWidth: 400,
-              }}
-            >
-              <input
-                placeholder="Admin Name"
-                value={orgAdminForm[org.id]?.name || ""}
-                onChange={(e) =>
-                  setOrgAdminForm((prev) => ({
-                    ...prev,
-                    [org.id]: {
-                      ...prev[org.id],
-                      name: e.target.value,
-                    },
-                  }))
-                }
-              />
-
-              <input
-                placeholder="Admin Email"
-                value={orgAdminForm[org.id]?.email || ""}
-                onChange={(e) =>
-                  setOrgAdminForm((prev) => ({
-                    ...prev,
-                    [org.id]: {
-                      ...prev[org.id],
-                      email: e.target.value,
-                    },
-                  }))
-                }
-              />
-
-              <input
-                type="password"
-                placeholder="Temporary Password"
-                value={orgAdminForm[org.id]?.password || ""}
-                onChange={(e) =>
-                  setOrgAdminForm((prev) => ({
-                    ...prev,
-                    [org.id]: {
-                      ...prev[org.id],
-                      password: e.target.value,
-                    },
-                  }))
-                }
-              />
-
-              <button onClick={() => createOrgAdmin(org.id)} disabled={loading}>
-                {loading ? "Creating..." : "Create Org Admin"}
-              </button>
+        <section className="card">
+          <div className="section-header">
+            <div>
+              <h2>Create Organization</h2>
+              <p className="muted">
+                Add a certificate issuing organization to the system.
+              </p>
             </div>
           </div>
-        </div>
-      ))}
-    </div>
+
+          <form className="form-grid" onSubmit={createOrg}>
+            <label className="field">
+              <span>Organization Name</span>
+              <input
+                className="input"
+                placeholder="Example University"
+                value={orgName}
+                onChange={(e) => setOrgName(e.target.value)}
+                disabled={loading}
+              />
+            </label>
+            <div className="field">
+              <span>&nbsp;</span>
+              <button className="button" type="submit" disabled={loading}>
+                {loading ? "Creating..." : "Create Org"}
+              </button>
+            </div>
+          </form>
+        </section>
+
+        <section className="grid">
+          <div className="section-header">
+            <div>
+              <h2>Organizations</h2>
+              <p className="muted">Assign and revoke organization admins.</p>
+            </div>
+          </div>
+
+          {fetching ? <div className="alert">Loading organizations...</div> : null}
+
+          {!fetching && organizations.length === 0 ? (
+            <div className="empty-state">
+              <strong>No organizations found</strong>
+              <span>Create an organization to begin onboarding admins.</span>
+            </div>
+          ) : null}
+
+          {!fetching && organizations.length > 0 ? (
+            <div className="grid grid-two">
+              {organizations.map((org) => (
+                <article className="card card-subtle" key={org.id}>
+                  <div className="section-header">
+                    <div>
+                      <h3>{org.name || "Untitled organization"}</h3>
+                      <p className="muted hash-value">ID: {org.id}</p>
+                    </div>
+                    <span className="badge badge-primary">
+                      {org.orgAdminIds?.length || 0} admins
+                    </span>
+                  </div>
+
+                  <p className="muted">
+                    Created by {getUserLabel(org.createdBy) || "Unknown"}
+                  </p>
+
+                  <div className="grid">
+                    <div>
+                      <h3>Org Admins</h3>
+                      {org.orgAdminIds?.length > 0 ? (
+                        <div className="grid">
+                          {org.orgAdminIds.map((uid) => (
+                            <div className="profile-chip" key={uid}>
+                              <span className="profile-avatar">
+                                {getUserLabel(uid).charAt(0).toUpperCase()}
+                              </span>
+                              <span className="profile-meta">
+                                <strong>{getUserLabel(uid)}</strong>
+                                <span className="hash-value">{uid}</span>
+                              </span>
+                              <button
+                                type="button"
+                                className="button button-danger button-small"
+                                onClick={() => removeOrgAdmin(org.id, uid)}
+                                disabled={loading}
+                              >
+                                {loading ? "Processing..." : "Revoke"}
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="empty-state">
+                          <strong>No org admins assigned</strong>
+                          <span>Add an admin using the form below.</span>
+                        </div>
+                      )}
+                    </div>
+
+                    <form
+                      className="form-grid"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        createOrgAdmin(org.id);
+                      }}
+                    >
+                      <label className="field full-width">
+                        <span>Admin Name</span>
+                        <input
+                          className="input"
+                          placeholder="Admin name"
+                          value={orgAdminForm[org.id]?.name || ""}
+                          onChange={(e) =>
+                            updateOrgAdminForm(org.id, "name", e.target.value)
+                          }
+                          disabled={loading}
+                        />
+                      </label>
+
+                      <label className="field">
+                        <span>Admin Email</span>
+                        <input
+                          className="input"
+                          placeholder="admin@example.com"
+                          type="email"
+                          value={orgAdminForm[org.id]?.email || ""}
+                          onChange={(e) =>
+                            updateOrgAdminForm(org.id, "email", e.target.value)
+                          }
+                          disabled={loading}
+                        />
+                      </label>
+
+                      <label className="field">
+                        <span>Temporary Password</span>
+                        <input
+                          className="input"
+                          type="password"
+                          placeholder="Minimum 6 characters"
+                          value={orgAdminForm[org.id]?.password || ""}
+                          onChange={(e) =>
+                            updateOrgAdminForm(org.id, "password", e.target.value)
+                          }
+                          disabled={loading}
+                        />
+                      </label>
+
+                      <button className="button full-width" disabled={loading}>
+                        {loading ? "Creating..." : "Create Org Admin"}
+                      </button>
+                    </form>
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : null}
+        </section>
+      </div>
+    </AppLayout>
   );
 }
