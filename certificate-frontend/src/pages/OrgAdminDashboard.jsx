@@ -20,7 +20,139 @@ const emptyCertificateForm = {
   issueDate: "",
 };
 
+const MAX_BULK_CERTIFICATES = 200;
+const BULK_CSV_HEADER = "studentName,studentEmail,courseName,issueDate";
+
 const AMOY_TX_BASE_URL = "https://amoy.polygonscan.com/tx/";
+
+function parseCsvLine(line) {
+  const cells = [];
+  let current = "";
+  let insideQuotes = false;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    const nextCharacter = line[index + 1];
+
+    if (character === '"' && nextCharacter === '"') {
+      current += '"';
+      index += 1;
+      continue;
+    }
+
+    if (character === '"') {
+      insideQuotes = !insideQuotes;
+      continue;
+    }
+
+    if (character === "," && !insideQuotes) {
+      cells.push(current.trim());
+      current = "";
+      continue;
+    }
+
+    current += character;
+  }
+
+  cells.push(current.trim());
+
+  return cells;
+}
+
+function normalizeHeader(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]/g, "");
+}
+
+function hasBulkHeader(cells) {
+  const expectedHeaders = [
+    "studentname",
+    "studentemail",
+    "coursename",
+    "issuedate",
+  ];
+
+  return expectedHeaders.every(
+    (header, index) => normalizeHeader(cells[index]) === header,
+  );
+}
+
+function parseBulkCertificateInput(input) {
+  const lines = input
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const validationErrors = [];
+
+  if (lines.length === 0) {
+    return {
+      rows: [],
+      validationErrors: ["Add at least one certificate row."],
+    };
+  }
+
+  const firstCells = parseCsvLine(lines[0]);
+  const dataLines = hasBulkHeader(firstCells) ? lines.slice(1) : lines;
+
+  if (dataLines.length === 0) {
+    return {
+      rows: [],
+      validationErrors: ["Add certificate rows below the CSV header."],
+    };
+  }
+
+  if (dataLines.length > MAX_BULK_CERTIFICATES) {
+    validationErrors.push(
+      `Bulk issuance is limited to ${MAX_BULK_CERTIFICATES} certificates per batch.`,
+    );
+  }
+
+  const rows = dataLines.map((line, index) => {
+    const rowNumber = index + 1;
+    const cells = parseCsvLine(line);
+    const [studentName = "", studentEmail = "", courseName = "", issueDate = ""] =
+      cells;
+    const row = {
+      studentName: studentName.trim(),
+      studentEmail: studentEmail.trim().toLowerCase(),
+      courseName: courseName.trim(),
+      issueDate: issueDate.trim(),
+    };
+
+    if (cells.length !== 4) {
+      validationErrors.push(
+        `Row ${rowNumber}: expected 4 comma-separated fields.`,
+      );
+    }
+
+    if (!row.studentName) {
+      validationErrors.push(`Row ${rowNumber}: studentName is required.`);
+    }
+
+    if (!row.studentEmail || !row.studentEmail.includes("@")) {
+      validationErrors.push(
+        `Row ${rowNumber}: a valid studentEmail is required.`,
+      );
+    }
+
+    if (!row.courseName) {
+      validationErrors.push(`Row ${rowNumber}: courseName is required.`);
+    }
+
+    if (!row.issueDate) {
+      validationErrors.push(`Row ${rowNumber}: issueDate is required.`);
+    }
+
+    return row;
+  });
+
+  return {
+    rows,
+    validationErrors,
+  };
+}
 
 function getReadableError(error) {
   if (error?.code === "functions/already-exists") {
@@ -276,11 +408,16 @@ export default function OrgAdminDashboard({ user }) {
   const [certificates, setCertificates] = useState([]);
   const [teacherForm, setTeacherForm] = useState(emptyTeacherForm);
   const [certificateForm, setCertificateForm] = useState(emptyCertificateForm);
+  const [bulkCsvInput, setBulkCsvInput] = useState("");
+  const [bulkRows, setBulkRows] = useState([]);
+  const [bulkValidationErrors, setBulkValidationErrors] = useState([]);
+  const [bulkPreviewReady, setBulkPreviewReady] = useState(false);
   const [pageLoading, setPageLoading] = useState(true);
   const [teachersLoading, setTeachersLoading] = useState(false);
   const [certificatesLoading, setCertificatesLoading] = useState(false);
   const [creatingTeacher, setCreatingTeacher] = useState(false);
   const [issuingCertificate, setIssuingCertificate] = useState(false);
+  const [issuingBulkCertificates, setIssuingBulkCertificates] = useState(false);
   const [revokingTeacherId, setRevokingTeacherId] = useState("");
   const [revokingCertificateId, setRevokingCertificateId] = useState("");
   const [downloadingCertificateId, setDownloadingCertificateId] = useState("");
@@ -299,6 +436,10 @@ export default function OrgAdminDashboard({ user }) {
   );
   const issueCertificateFn = useMemo(
     () => httpsCallable(functions, "issueCertificate"),
+    [],
+  );
+  const issueBulkCertificatesFn = useMemo(
+    () => httpsCallable(functions, "issueBulkCertificates"),
     [],
   );
   const revokeCertificateFn = useMemo(
@@ -434,6 +575,13 @@ export default function OrgAdminDashboard({ user }) {
       ...current,
       [field]: value,
     }));
+  };
+
+  const updateBulkCsvInput = (value) => {
+    setBulkCsvInput(value);
+    setBulkRows([]);
+    setBulkValidationErrors([]);
+    setBulkPreviewReady(false);
   };
 
   const copyVerifyLink = async (certificate) => {
@@ -596,6 +744,66 @@ export default function OrgAdminDashboard({ user }) {
       setError(getReadableError(err));
     } finally {
       setIssuingCertificate(false);
+    }
+  };
+
+  const previewBulkCertificates = () => {
+    setError("");
+    setSuccess("");
+
+    const { rows, validationErrors } =
+      parseBulkCertificateInput(bulkCsvInput);
+
+    setBulkRows(rows);
+    setBulkValidationErrors(validationErrors);
+    setBulkPreviewReady(validationErrors.length === 0 && rows.length > 0);
+
+    if (validationErrors.length > 0) {
+      setError("Fix the highlighted bulk rows before issuing.");
+      return;
+    }
+
+    setSuccess(`Preview ready for ${rows.length} bulk certificate row(s).`);
+  };
+
+  const issueBulkCertificates = async () => {
+    setError("");
+    setSuccess("");
+
+    if (
+      !bulkPreviewReady ||
+      bulkValidationErrors.length > 0 ||
+      bulkRows.length === 0
+    ) {
+      setError("Preview valid bulk rows before issuing.");
+      return;
+    }
+
+    try {
+      setIssuingBulkCertificates(true);
+      await user.getIdToken(true);
+
+      const result = await issueBulkCertificatesFn({
+        certificates: bulkRows,
+      });
+      const batchId = result.data?.batchId || "";
+      const count = result.data?.count || bulkRows.length;
+
+      setBulkCsvInput("");
+      setBulkRows([]);
+      setBulkValidationErrors([]);
+      setBulkPreviewReady(false);
+      setSuccess(
+        batchId
+          ? `Bulk batch created successfully. Batch ID: ${batchId}. Count: ${count}.`
+          : `Bulk batch created successfully. Count: ${count}.`,
+      );
+      await fetchCertificates(user.uid);
+    } catch (err) {
+      console.error(err);
+      setError(getReadableError(err));
+    } finally {
+      setIssuingBulkCertificates(false);
     }
   };
 
@@ -786,6 +994,101 @@ export default function OrgAdminDashboard({ user }) {
                   {issuingCertificate ? "Issuing..." : "Issue Certificate"}
                 </button>
               </form>
+            </section>
+
+            <section className="card">
+              <div className="section-header">
+                <div>
+                  <h2>Bulk Issue Certificates</h2>
+                  <p className="muted">
+                    Paste CSV rows, preview validation, then create a Merkle batch.
+                  </p>
+                </div>
+                {bulkPreviewReady ? (
+                  <span className="badge badge-success">
+                    {bulkRows.length} ready
+                  </span>
+                ) : null}
+              </div>
+
+              <div className="form-grid">
+                <label className="field full-width">
+                  <span>CSV Rows</span>
+                  <textarea
+                    className="input textarea"
+                    rows={7}
+                    placeholder={`${BULK_CSV_HEADER}\nAyesha Khan,ayesha@example.com,Blockchain Basics,2026-05-12\nAli Raza,ali@example.com,Smart Contracts,2026-05-12`}
+                    value={bulkCsvInput}
+                    onChange={(event) => updateBulkCsvInput(event.target.value)}
+                    disabled={issuingBulkCertificates}
+                  />
+                </label>
+
+                <div className="button-row full-width">
+                  <button
+                    type="button"
+                    onClick={previewBulkCertificates}
+                    disabled={issuingBulkCertificates || !bulkCsvInput.trim()}
+                    className="button button-outline"
+                  >
+                    Preview Rows
+                  </button>
+                  <button
+                    type="button"
+                    onClick={issueBulkCertificates}
+                    disabled={
+                      issuingBulkCertificates ||
+                      !bulkPreviewReady ||
+                      bulkValidationErrors.length > 0
+                    }
+                    className="button"
+                  >
+                    {issuingBulkCertificates ? "Issuing..." : "Issue Bulk Batch"}
+                  </button>
+                </div>
+              </div>
+
+              {bulkValidationErrors.length > 0 ? (
+                <div className="alert alert-error bulk-errors">
+                  {bulkValidationErrors.slice(0, 6).map((validationError) => (
+                    <span key={validationError}>{validationError}</span>
+                  ))}
+                  {bulkValidationErrors.length > 6 ? (
+                    <span>
+                      {bulkValidationErrors.length - 6} more validation issue(s).
+                    </span>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {bulkRows.length > 0 ? (
+                <div className="table-container bulk-preview-table">
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>#</th>
+                        <th>Student</th>
+                        <th>Email</th>
+                        <th>Course</th>
+                        <th>Issue Date</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {bulkRows.map((row, index) => (
+                        <tr
+                          key={`${row.studentEmail}-${row.courseName}-${index}`}
+                        >
+                          <td>{index + 1}</td>
+                          <td>{row.studentName || "-"}</td>
+                          <td>{row.studentEmail || "-"}</td>
+                          <td>{row.courseName || "-"}</td>
+                          <td>{row.issueDate || "-"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
             </section>
 
             <CertificateTable

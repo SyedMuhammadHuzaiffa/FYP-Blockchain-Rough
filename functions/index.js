@@ -5,6 +5,7 @@ const sgMail = require("@sendgrid/mail");
 const {
   computeCertificateHash,
 } = require("./blockchain/certificateHash");
+const { buildMerkleBatch } = require("./blockchain/merkleBatch");
 const {
   anchorCertificateOnChain,
   revokeCertificateOnChain,
@@ -24,6 +25,7 @@ const CERTIFICATE_REGISTRY_ADDRESS = defineSecret(
   "CERTIFICATE_REGISTRY_ADDRESS",
 );
 const BLOCKCHAIN_CHAIN_ID = defineSecret("BLOCKCHAIN_CHAIN_ID");
+const MAX_BULK_CERTIFICATES = 200;
 
 // =============================
 // HELPERS
@@ -154,6 +156,29 @@ async function requireActiveTeacher(request) {
     uid: callerUid,
     email: callerData.email || auth.token?.email || null,
     organizationId: callerData.organizationId,
+  };
+}
+
+async function getActiveOrganization(organizationId) {
+  const orgRef = db.collection("organizations").doc(organizationId);
+  const orgDoc = await orgRef.get();
+
+  if (!orgDoc.exists) {
+    throw new HttpsError("not-found", "Organization not found");
+  }
+
+  const orgData = orgDoc.data();
+
+  if (orgData?.status === "inactive") {
+    throw new HttpsError(
+      "failed-precondition",
+      "Cannot issue certificates for an inactive organization",
+    );
+  }
+
+  return {
+    id: organizationId,
+    name: orgData?.name || "",
   };
 }
 
@@ -1169,6 +1194,188 @@ exports.issueCertificate = onCall(
       if (error instanceof HttpsError) throw error;
 
       throw new HttpsError("internal", "Server error while issuing certificate");
+    }
+  },
+);
+
+// =============================
+// ISSUE BULK CERTIFICATES
+// =============================
+exports.issueBulkCertificates = onCall(
+  {
+    region: REGION,
+    cors: true,
+    invoker: "public",
+  },
+  async (request) => {
+    try {
+      const caller = await requireActiveTeacher(request);
+      const requestedOrganizationId = cleanName(request.data?.organizationId);
+      const rows = request.data?.certificates;
+
+      if (
+        requestedOrganizationId &&
+        requestedOrganizationId !== caller.organizationId
+      ) {
+        throw new HttpsError(
+          "permission-denied",
+          "Bulk certificates can only be issued for your organization",
+        );
+      }
+
+      if (!Array.isArray(rows) || rows.length === 0) {
+        throw new HttpsError(
+          "invalid-argument",
+          "At least one certificate row is required",
+        );
+      }
+
+      if (rows.length > MAX_BULK_CERTIFICATES) {
+        throw new HttpsError(
+          "invalid-argument",
+          `Bulk issuance is limited to ${MAX_BULK_CERTIFICATES} certificates per batch`,
+        );
+      }
+
+      const organization = await getActiveOrganization(caller.organizationId);
+      const validationErrors = [];
+      const normalizedRows = rows.map((row, index) => {
+        const rowNumber = index + 1;
+        const studentName = cleanName(row?.studentName);
+        const studentEmail = normalizeEmail(row?.studentEmail);
+        const courseName = cleanName(row?.courseName);
+        const issueDate = cleanName(row?.issueDate);
+
+        if (!studentName) {
+          validationErrors.push(`Row ${rowNumber}: studentName is required`);
+        }
+
+        if (!studentEmail || !studentEmail.includes("@")) {
+          validationErrors.push(
+            `Row ${rowNumber}: a valid studentEmail is required`,
+          );
+        }
+
+        if (!courseName) {
+          validationErrors.push(`Row ${rowNumber}: courseName is required`);
+        }
+
+        if (!issueDate) {
+          validationErrors.push(`Row ${rowNumber}: issueDate is required`);
+        }
+
+        return {
+          studentName,
+          studentEmail,
+          courseName,
+          issueDate,
+        };
+      });
+
+      if (validationErrors.length > 0) {
+        throw new HttpsError(
+          "invalid-argument",
+          validationErrors.slice(0, 5).join("; "),
+          {
+            errors: validationErrors,
+          },
+        );
+      }
+
+      const batchRef = db.collection("certificateBatches").doc();
+      const batchId = batchRef.id;
+      const certificateRows = normalizedRows.map((row) => {
+        const certificateRef = db.collection("certificates").doc();
+        const certificateId = certificateRef.id;
+        const certificateData = {
+          certificateId,
+          ...row,
+          organizationId: organization.id,
+          organizationName: organization.name,
+          issuedBy: caller.uid,
+          issuedByEmail: caller.email,
+        };
+
+        return {
+          certificateRef,
+          certificateData,
+          certificateHash: computeCertificateHash(certificateData),
+        };
+      });
+      const merkleBatch = buildMerkleBatch(
+        certificateRows.map((certificate) => certificate.certificateHash),
+      );
+      const certificateIds = certificateRows.map(
+        ({ certificateData }) => certificateData.certificateId,
+      );
+      const writeBatch = db.batch();
+
+      certificateRows.forEach((certificate, index) => {
+        writeBatch.set(certificate.certificateRef, {
+          ...certificate.certificateData,
+          certificateHash: certificate.certificateHash,
+          status: "issued",
+          blockchainStatus: "pending",
+          ipfsStatus: "pending",
+          batchId,
+          batchRoot: merkleBatch.root,
+          batchIndex: index,
+          batchProof: merkleBatch.proofs[index],
+          batchSize: merkleBatch.size,
+          issuanceMode: "bulk",
+          createdAt: timestamp(),
+          updatedAt: timestamp(),
+        });
+      });
+
+      writeBatch.set(batchRef, {
+        batchId,
+        organizationId: organization.id,
+        organizationName: organization.name,
+        issuedBy: caller.uid,
+        issuedByEmail: caller.email,
+        batchRoot: merkleBatch.root,
+        certificateIds,
+        count: certificateIds.length,
+        status: "created",
+        blockchainStatus: "pending",
+        createdAt: timestamp(),
+        updatedAt: timestamp(),
+      });
+
+      addAdminLog(writeBatch, {
+        action: "ISSUE_BULK_CERTIFICATES",
+        performedBy: caller.uid,
+        performedByEmail: caller.email,
+        orgId: organization.id,
+        metadata: {
+          batchId,
+          batchRoot: merkleBatch.root,
+          count: certificateIds.length,
+          organizationName: organization.name,
+        },
+      });
+
+      await writeBatch.commit();
+
+      return {
+        success: true,
+        batchId,
+        batchRoot: merkleBatch.root,
+        count: certificateIds.length,
+        certificateIds,
+        blockchainStatus: "pending",
+        message: "Bulk certificates created successfully",
+      };
+    } catch (error) {
+      console.error("issueBulkCertificates error:", error);
+
+      if (error instanceof HttpsError) throw error;
+
+      throw new HttpsError(
+        "internal",
+        "Server error while issuing bulk certificates",
+      );
     }
   },
 );

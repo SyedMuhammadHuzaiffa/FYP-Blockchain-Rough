@@ -365,6 +365,12 @@ input:not([class]) {
     background 180ms ease;
 }
 
+.textarea {
+  min-height: 150px;
+  resize: vertical;
+  line-height: 1.45;
+}
+
 .input:focus,
 input:not([class]):focus {
   border-color: var(--primary);
@@ -556,6 +562,16 @@ input:not([class]):focus {
     linear-gradient(135deg, color-mix(in srgb, var(--success-container) 72%, transparent), transparent),
     var(--glass-bg-strong);
   color: var(--success);
+}
+
+.bulk-errors {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.bulk-preview-table {
+  margin-top: 16px;
 }
 
 .table-container {
