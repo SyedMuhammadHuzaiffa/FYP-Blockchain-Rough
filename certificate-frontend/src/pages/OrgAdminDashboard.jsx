@@ -230,7 +230,11 @@ function CertificateTable({
                           onClick={() =>
                             onDownload({
                               ...certificate,
-                              organizationName,
+                              organizationName:
+                                certificate.organizationName ||
+                                organizationName ||
+                                certificate.organizationId ||
+                                "",
                             })
                           }
                           disabled={isDownloading}
@@ -463,9 +467,19 @@ export default function OrgAdminDashboard({ user }) {
         {
           ...certificate,
           certificateId: currentCertificateId,
-          organizationName,
+          organizationName:
+            certificate.organizationName ||
+            organizationName ||
+            certificate.organizationId ||
+            "",
         },
-        { organizationName },
+        {
+          organizationName:
+            certificate.organizationName ||
+            organizationName ||
+            certificate.organizationId ||
+            "",
+        },
       );
       setSuccess("Certificate PDF downloaded.");
     } catch (err) {

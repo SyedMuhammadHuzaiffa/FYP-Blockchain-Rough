@@ -1042,6 +1042,13 @@ exports.issueCertificate = onCall(
         );
       }
 
+      const organizationSnap = await db
+        .collection("organizations")
+        .doc(caller.organizationId)
+        .get();
+      const organizationName = organizationSnap.exists
+        ? organizationSnap.data()?.name || ""
+        : "";
       const certificateRef = db.collection("certificates").doc();
       const certificateId = certificateRef.id;
       const certificateData = {
@@ -1059,6 +1066,7 @@ exports.issueCertificate = onCall(
 
       batch.set(certificateRef, {
         ...certificateData,
+        organizationName,
         status: "issued",
         blockchainStatus: "pending",
         ipfsStatus: "pending",
@@ -1073,6 +1081,9 @@ exports.issueCertificate = onCall(
         targetEmail: normalizedStudentEmail,
         orgId: caller.organizationId,
         certificateId,
+        metadata: {
+          organizationName,
+        },
       });
 
       await batch.commit();

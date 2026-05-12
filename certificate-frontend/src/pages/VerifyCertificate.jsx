@@ -228,7 +228,7 @@ export default function VerifyCertificate() {
         setCertificate(certificateData);
         setOrganizationName(getFallbackOrganizationName(certificateData));
 
-        if (certificateData.organizationId) {
+        if (!certificateData.organizationName && certificateData.organizationId) {
           try {
             const organizationSnap = await getDoc(
               doc(db, "organizations", certificateData.organizationId),

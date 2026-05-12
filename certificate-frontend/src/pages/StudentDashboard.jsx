@@ -274,8 +274,8 @@ export default function StudentDashboard({ user, role }) {
     }
 
     const organizationName =
-      organizationNames[certificate.organizationId] ||
       certificate.organizationName ||
+      organizationNames[certificate.organizationId] ||
       certificate.organizationId ||
       "";
 
@@ -423,6 +423,7 @@ export default function StudentDashboard({ user, role }) {
                     const verifyLink = getVerifyLink(certificateId);
                     const verificationStatus = getVerificationStatus(certificate);
                     const organizationName =
+                      certificate.organizationName ||
                       organizationNames[certificate.organizationId] ||
                       certificate.organizationId ||
                       "-";
