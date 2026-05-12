@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { loginUser, getUserRole } from "../Auth";
+import { loginUser, getUserRole } from "../auth";
 import { Link, useNavigate } from "react-router-dom";
 import { ThemeToggle } from "../components/ThemeProvider";
 
