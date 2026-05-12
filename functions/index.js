@@ -11,6 +11,9 @@ const {
   anchorCertificateOnChain,
   revokeCertificateOnChain,
 } = require("./blockchain/certificateRegistry");
+const {
+  sendCertificateEmail,
+} = require("./email/certificateEmail");
 
 if (admin.apps.length === 0) {
   admin.initializeApp();
@@ -220,6 +223,63 @@ function getErrorMessage(error) {
     error?.shortMessage || error?.reason || error?.message || String(error);
 
   return message.length > 1000 ? `${message.slice(0, 1000)}...` : message;
+}
+
+function getVerificationBaseUrl(request) {
+  return (
+    request.rawRequest?.headers?.origin ||
+    process.env.FRONTEND_BASE_URL ||
+    ""
+  );
+}
+
+async function sendAndRecordCertificateEmail({
+  certificateRef,
+  certificate,
+  verificationBaseUrl,
+}) {
+  try {
+    await sendCertificateEmail({
+      certificate,
+      verificationBaseUrl,
+    });
+
+    try {
+      await certificateRef.update({
+        emailStatus: "sent",
+        emailSentAt: timestamp(),
+        emailError: null,
+        updatedAt: timestamp(),
+      });
+    } catch (recordError) {
+      console.error("Failed to record sent certificate email:", recordError);
+    }
+
+    return {
+      status: "sent",
+      error: null,
+    };
+  } catch (error) {
+    const emailError = getErrorMessage(error);
+
+    console.error("sendCertificateEmail error:", error);
+
+    try {
+      await certificateRef.update({
+        emailStatus: "failed",
+        emailSentAt: null,
+        emailError,
+        updatedAt: timestamp(),
+      });
+    } catch (recordError) {
+      console.error("Failed to record failed certificate email:", recordError);
+    }
+
+    return {
+      status: "failed",
+      error: emailError,
+    };
+  }
 }
 
 // =============================
@@ -1032,6 +1092,7 @@ exports.issueCertificate = onCall(
       BLOCKCHAIN_PRIVATE_KEY,
       CERTIFICATE_REGISTRY_ADDRESS,
       BLOCKCHAIN_CHAIN_ID,
+      "SENDGRID_API_KEY",
     ],
   },
   async (request) => {
@@ -1181,12 +1242,26 @@ exports.issueCertificate = onCall(
         await failureBatch.commit();
       }
 
+      const emailResult = await sendAndRecordCertificateEmail({
+        certificateRef,
+        certificate: {
+          ...certificateData,
+          organizationName,
+          certificateHash,
+          blockchainStatus,
+          blockchainError,
+        },
+        verificationBaseUrl: getVerificationBaseUrl(request),
+      });
+
       return {
         success: true,
         certificateId,
         certificateHash,
         blockchainStatus,
         blockchainError,
+        emailStatus: emailResult.status,
+        emailError: emailResult.error,
         message: "Certificate issued successfully",
       };
     } catch (error) {
@@ -1212,6 +1287,7 @@ exports.issueBulkCertificates = onCall(
       BLOCKCHAIN_PRIVATE_KEY,
       CERTIFICATE_REGISTRY_ADDRESS,
       BLOCKCHAIN_CHAIN_ID,
+      "SENDGRID_API_KEY",
     ],
   },
   async (request) => {
@@ -1456,6 +1532,42 @@ exports.issueBulkCertificates = onCall(
         await failureBatch.commit();
       }
 
+      const emailResults = await Promise.all(
+        certificateRows.map(({ certificateRef, certificateData, certificateHash }) =>
+          sendAndRecordCertificateEmail({
+            certificateRef,
+            certificate: {
+              ...certificateData,
+              certificateHash,
+              batchId,
+              batchRoot: merkleBatch.root,
+              batchSize: merkleBatch.size,
+              issuanceMode: "bulk",
+              blockchainStatus,
+              blockchainError,
+            },
+            verificationBaseUrl: getVerificationBaseUrl(request),
+          }),
+        ),
+      );
+      const emailsSent = emailResults.filter(
+        (emailResult) => emailResult.status === "sent",
+      ).length;
+      const emailsFailed = emailResults.length - emailsSent;
+
+      await batchRef
+        .update({
+          emailsSent,
+          emailsFailed,
+          updatedAt: timestamp(),
+        })
+        .catch((emailSummaryError) => {
+          console.error(
+            "Failed to record certificate batch email summary:",
+            emailSummaryError,
+          );
+        });
+
       return {
         success: true,
         batchId,
@@ -1464,6 +1576,8 @@ exports.issueBulkCertificates = onCall(
         certificateIds,
         blockchainStatus,
         blockchainError,
+        emailsSent,
+        emailsFailed,
         message: "Bulk certificates created successfully",
       };
     } catch (error) {

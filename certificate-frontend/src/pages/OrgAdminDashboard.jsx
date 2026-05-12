@@ -200,7 +200,7 @@ function truncateMiddle(value = "", visible = 10) {
 function getStatusBadge(status = "unknown") {
   const normalized = status.toLowerCase();
 
-  if (["issued", "confirmed", "active"].includes(normalized)) {
+  if (["issued", "confirmed", "active", "sent"].includes(normalized)) {
     return "badge badge-success";
   }
 
@@ -265,6 +265,7 @@ function CertificateTable({
                 <th>Course</th>
                 <th>Firestore</th>
                 <th>Blockchain</th>
+                <th>Email</th>
                 <th>Verify</th>
                 <th>Revoke</th>
               </tr>
@@ -338,6 +339,15 @@ function CertificateTable({
                           </a>
                         ) : null}
                       </div>
+                    </td>
+                    <td>
+                      {certificate.emailStatus ? (
+                        <span className={getStatusBadge(certificate.emailStatus)}>
+                          {certificate.emailStatus}
+                        </span>
+                      ) : (
+                        "-"
+                      )}
                     </td>
                     <td>
                       <div className="action-group">
