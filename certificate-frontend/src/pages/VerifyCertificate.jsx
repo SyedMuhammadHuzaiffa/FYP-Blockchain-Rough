@@ -30,6 +30,14 @@ function formatValue(value) {
   return String(value);
 }
 
+function getFallbackOrganizationName(certificate) {
+  return (
+    certificate?.organizationName ||
+    certificate?.organizationId ||
+    "Unknown Organization"
+  );
+}
+
 function getTxLink(txHash) {
   return txHash ? `${AMOY_TX_BASE_URL}${txHash}` : "";
 }
@@ -164,7 +172,9 @@ export default function VerifyCertificate() {
   const [organizationName, setOrganizationName] = useState("");
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
-  const [error, setError] = useState("");
+  const [certificateError, setCertificateError] = useState("");
+  const [organizationWarning, setOrganizationWarning] = useState("");
+  const [pdfError, setPdfError] = useState("");
   const [copiedField, setCopiedField] = useState("");
   const [pdfLoading, setPdfLoading] = useState(false);
   const [blockchainCheck, setBlockchainCheck] = useState({
@@ -185,7 +195,9 @@ export default function VerifyCertificate() {
 
       setLoading(true);
       setNotFound(false);
-      setError("");
+      setCertificateError("");
+      setOrganizationWarning("");
+      setPdfError("");
       setCertificate(null);
       setOrganizationName("");
       setBlockchainCheck({
@@ -214,21 +226,31 @@ export default function VerifyCertificate() {
         };
 
         setCertificate(certificateData);
+        setOrganizationName(getFallbackOrganizationName(certificateData));
 
         if (certificateData.organizationId) {
-          const organizationSnap = await getDoc(
-            doc(db, "organizations", certificateData.organizationId),
-          );
+          try {
+            const organizationSnap = await getDoc(
+              doc(db, "organizations", certificateData.organizationId),
+            );
 
-          setOrganizationName(
-            organizationSnap.exists()
-              ? organizationSnap.data()?.name || certificateData.organizationId
-              : certificateData.organizationId,
-          );
+            if (organizationSnap.exists()) {
+              setOrganizationName(
+                organizationSnap.data()?.name ||
+                  getFallbackOrganizationName(certificateData),
+              );
+            }
+          } catch (organizationError) {
+            console.warn("Organization lookup failed:", organizationError);
+            setOrganizationWarning(
+              "Organization name could not be loaded. Showing the saved organization reference instead.",
+            );
+          }
         }
       } catch (err) {
         console.error(err);
-        setError("Unable to load certificate details.");
+        setCertificate(null);
+        setCertificateError("Unable to load certificate details.");
       } finally {
         setLoading(false);
       }
@@ -296,7 +318,7 @@ export default function VerifyCertificate() {
       window.setTimeout(() => setCopiedField(""), 2000);
     } catch (err) {
       console.error(err);
-      setError("Could not copy this value.");
+      setPdfError("Could not copy this value.");
     }
   };
 
@@ -307,23 +329,26 @@ export default function VerifyCertificate() {
   }) => {
     const currentCertificateId = certificate?.certificateId || certificate?.id;
 
-    if (!currentCertificateId || !certificate?.studentName || !certificate?.courseName) {
-      setError("This certificate does not have enough data to generate a PDF.");
+    if (!currentCertificateId) {
+      setPdfError("This certificate is missing an ID, so the PDF cannot be generated.");
       return;
     }
 
     setPdfLoading(true);
-    setError("");
+    setPdfError("");
 
     try {
+      const resolvedOrganizationName =
+        organizationName || getFallbackOrganizationName(certificate);
+
       await generateCertificatePdf(
         {
           ...certificate,
           certificateId: currentCertificateId,
-          organizationName: organizationName || certificate?.organizationId,
+          organizationName: resolvedOrganizationName,
         },
         {
-          organizationName: organizationName || certificate?.organizationId,
+          organizationName: resolvedOrganizationName,
           blockchainResult,
           computedHash: blockchainCheck.computedHash,
           onChain: blockchainCheck.onChain,
@@ -333,7 +358,7 @@ export default function VerifyCertificate() {
       );
     } catch (err) {
       console.error(err);
-      setError("Could not generate the certificate PDF. Please try again.");
+      setPdfError("Could not generate the certificate PDF. Please try again.");
     } finally {
       setPdfLoading(false);
     }
@@ -369,12 +394,12 @@ export default function VerifyCertificate() {
     );
   }
 
-  if (error && !certificate) {
+  if (certificateError && !certificate) {
     return renderPublicShell(
       <section className="card">
         <p className="eyebrow">Certificate Verification</p>
         <h1>Unable to verify certificate</h1>
-        <div className="alert alert-error">{error}</div>
+        <div className="alert alert-error">{certificateError}</div>
       </section>,
     );
   }
@@ -402,8 +427,6 @@ export default function VerifyCertificate() {
   });
   const canDownloadCertificate =
     Boolean(certificate?.certificateId || certificate?.id) &&
-    Boolean(certificate?.studentName) &&
-    Boolean(certificate?.courseName) &&
     (heroState.title === "VALID CERTIFICATE" ||
       heroState.title === "REVOKED ON BLOCKCHAIN");
 
@@ -413,7 +436,7 @@ export default function VerifyCertificate() {
     ["Student Email", certificate?.studentEmail],
     ["Course Name", certificate?.courseName],
     ["Issue Date", certificate?.issueDate],
-    ["Organization", organizationName || certificate?.organizationId],
+    ["Organization", organizationName || getFallbackOrganizationName(certificate)],
     ["Issued By Email", certificate?.issuedByEmail],
   ];
 
@@ -503,7 +526,8 @@ export default function VerifyCertificate() {
         ) : null}
       </section>
 
-      {error ? <div className="alert alert-error">{error}</div> : null}
+      {organizationWarning ? <div className="alert">{organizationWarning}</div> : null}
+      {pdfError ? <div className="alert alert-error">{pdfError}</div> : null}
 
       <div className="grid grid-two">
         <section className="card">

@@ -28,6 +28,10 @@ function formatValue(value, fallback = "-") {
   return String(value);
 }
 
+function firstPresent(...values) {
+  return values.find((value) => value !== undefined && value !== null && value !== "");
+}
+
 function getCertificateId(certificate = {}) {
   return certificate.certificateId || certificate.id || "";
 }
@@ -42,7 +46,9 @@ function getVerifyUrl(certificate = {}, options = {}) {
       ? window.location.origin
       : "");
 
-  return certificateId && origin ? `${origin}/verify/${certificateId}` : "";
+  if (!certificateId) return "";
+
+  return origin ? `${origin}/verify/${certificateId}` : `/verify/${certificateId}`;
 }
 
 function getBlockchainStatus(certificate = {}, options = {}) {
@@ -73,12 +79,32 @@ function getBlockchainStatus(certificate = {}, options = {}) {
 }
 
 function getProofHash(certificate = {}, options = {}) {
-  return (
-    options.certificateHash ||
-    options.computedHash ||
-    options.onChain?.certificateHash ||
-    certificate.certificateHash ||
-    ""
+  return firstPresent(
+    options.certificateHash,
+    options.computedHash,
+    options.onChain?.certificateHash,
+    certificate.certificateHash,
+    "Not available",
+  );
+}
+
+function getTransactionHash(certificate = {}) {
+  return firstPresent(
+    certificate.blockchainTxHash,
+    certificate.revokeTxHash,
+    certificate.txHash,
+    certificate.transactionHash,
+    "Not available",
+  );
+}
+
+function getIpfsCid(certificate = {}, options = {}) {
+  return firstPresent(
+    certificate.ipfsCid,
+    certificate.ipfsCID,
+    certificate.ipfsHash,
+    options.onChain?.ipfsCid,
+    "Not available",
   );
 }
 
@@ -212,8 +238,9 @@ function downloadBlob(blob, fileName) {
 }
 
 export async function generateCertificatePdf(certificate, options = {}) {
-  const certificateId = getCertificateId(certificate);
-  const verificationUrl = getVerifyUrl(certificate, options);
+  const sourceCertificate = certificate || {};
+  const certificateId = getCertificateId(sourceCertificate);
+  const verificationUrl = getVerifyUrl(sourceCertificate, options);
 
   if (!certificateId) {
     throw new Error("Certificate ID is required to generate the PDF.");
@@ -242,18 +269,20 @@ export async function generateCertificatePdf(certificate, options = {}) {
 
   const organizationName =
     options.organizationName ||
-    certificate.organizationName ||
-    certificate.orgName ||
-    certificate.organizationId ||
-    "CertChain Institution";
+    sourceCertificate.organizationName ||
+    sourceCertificate.orgName ||
+    sourceCertificate.organizationId ||
+    "Unknown Organization";
   const certificateTitle =
-    options.title || certificate.title || "Certificate of Achievement";
-  const studentName = certificate.studentName || "Student Name";
-  const courseName = certificate.courseName || "Course / Event";
-  const issueDate = formatValue(certificate.issueDate);
-  const issuedByEmail = formatValue(certificate.issuedByEmail);
-  const blockchainStatus = getBlockchainStatus(certificate, options);
-  const proofHash = getProofHash(certificate, options);
+    options.title || sourceCertificate.title || "Certificate of Achievement";
+  const studentName = sourceCertificate.studentName || "Student Name";
+  const courseName = sourceCertificate.courseName || "Course / Event";
+  const issueDate = formatValue(sourceCertificate.issueDate);
+  const issuedByEmail = formatValue(sourceCertificate.issuedByEmail);
+  const blockchainStatus = getBlockchainStatus(sourceCertificate, options);
+  const proofHash = getProofHash(sourceCertificate, options);
+  const transactionHash = getTransactionHash(sourceCertificate);
+  const ipfsCid = getIpfsCid(sourceCertificate, options);
   const fileName =
     options.fileName ||
     `${sanitizeFilePart(studentName)}-${sanitizeFilePart(certificateId)}.pdf`;
@@ -428,9 +457,9 @@ export async function generateCertificatePdf(certificate, options = {}) {
 
   page.drawRectangle({
     x: MARGIN,
-    y: 60,
+    y: 38,
     width: PAGE_WIDTH - MARGIN * 2,
-    height: 100,
+    height: 122,
     color: COLORS.white,
     borderColor: COLORS.border,
     borderWidth: 0.8,
@@ -466,7 +495,7 @@ export async function generateCertificatePdf(certificate, options = {}) {
     label: "Issued By Email",
     value: issuedByEmail,
     x: firstColumn,
-    y: 78,
+    y: 72,
     width: 240,
     fonts,
   });
@@ -482,13 +511,13 @@ export async function generateCertificatePdf(certificate, options = {}) {
     label: "Blockchain Status",
     value: blockchainStatus,
     x: secondColumn,
-    y: 78,
+    y: 72,
     width: 224,
     fonts,
   });
   drawLabelValue(page, {
     label: "Certificate Hash",
-    value: proofHash || "Not available",
+    value: proofHash,
     x: thirdColumn,
     y: 112,
     width: 178,
@@ -496,9 +525,17 @@ export async function generateCertificatePdf(certificate, options = {}) {
   });
   drawLabelValue(page, {
     label: "Transaction Hash",
-    value: certificate.blockchainTxHash || certificate.revokeTxHash || "Not available",
+    value: transactionHash,
     x: thirdColumn,
-    y: 78,
+    y: 82,
+    width: 178,
+    fonts,
+  });
+  drawLabelValue(page, {
+    label: "IPFS CID",
+    value: ipfsCid,
+    x: thirdColumn,
+    y: 52,
     width: 178,
     fonts,
   });
