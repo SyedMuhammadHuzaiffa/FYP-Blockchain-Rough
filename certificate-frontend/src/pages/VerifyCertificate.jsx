@@ -13,8 +13,6 @@ import { generateCertificatePdf } from "../utils/certificatePdf";
 import { shareCertificate } from "../utils/shareCertificate";
 import { useToast } from "../components/toastContext";
 
-const AMOY_TX_BASE_URL = "https://amoy.polygonscan.com/tx/";
-
 const BLOCKCHAIN_RESULT = {
   CHECKING: "CHECKING BLOCKCHAIN",
   VERIFIED: "VERIFIED ON BLOCKCHAIN",
@@ -43,10 +41,6 @@ function getFallbackOrganizationName(certificate) {
     certificate?.organizationId ||
     "Unknown Organization"
   );
-}
-
-function getTxLink(txHash) {
-  return txHash ? `${AMOY_TX_BASE_URL}${txHash}` : "";
 }
 
 function normalizeHash(value) {
@@ -139,7 +133,11 @@ function getBadgeClass(value, positiveValues = []) {
   const normalized = String(value || "").toLowerCase();
 
   if (positiveValues.includes(normalized)) return "badge badge-success";
-  if (["revoked", "failed", "no", "mismatch"].includes(normalized)) {
+  if (
+    ["revoked", "failed", "no", "mismatch"].includes(normalized) ||
+    normalized.includes("failed") ||
+    normalized.includes("mismatch")
+  ) {
     return "badge badge-error";
   }
   if (["pending", "checking", "unknown", "-"].includes(normalized)) {
@@ -155,10 +153,25 @@ function getMerkleProofBadgeValue(merkleProofValid) {
   return merkleProofValid ? "confirmed" : "mismatch";
 }
 
+function getIpfsBadge(certificate) {
+  const status = String(certificate?.ipfsStatus || "").toLowerCase();
+  const hasIpfsProof = Boolean(certificate?.ipfsCid || certificate?.ipfsGatewayUrl);
+
+  if (status === "uploaded" || hasIpfsProof) {
+    return { value: "uploaded", text: "IPFS Uploaded" };
+  }
+
+  if (status === "failed" || status === "error") {
+    return { value: "failed", text: "IPFS Not Uploaded" };
+  }
+
+  return null;
+}
+
 function getHeroState({ firestoreStatus, blockchainResult, hashMatch, isRevoked }) {
   if (isRevoked || blockchainResult === BLOCKCHAIN_RESULT.REVOKED) {
     return {
-      title: "REVOKED ON BLOCKCHAIN",
+      title: "REVOKED CERTIFICATE",
       className: "status-hero status-risk",
     };
   }
@@ -194,6 +207,13 @@ function getHeroState({ firestoreStatus, blockchainResult, hashMatch, isRevoked 
     };
   }
 
+  if (blockchainResult === BLOCKCHAIN_RESULT.FAILED && firestoreStatus === "issued") {
+    return {
+      title: "VALID CERTIFICATE",
+      className: "status-hero status-valid",
+    };
+  }
+
   if (blockchainResult === BLOCKCHAIN_RESULT.CHECKING) {
     return {
       title: "CHECKING BLOCKCHAIN",
@@ -207,36 +227,6 @@ function getHeroState({ firestoreStatus, blockchainResult, hashMatch, isRevoked 
   };
 }
 
-function truncateMiddle(value = "", visible = 12) {
-  if (!value || value.length <= visible * 2 + 3) return value;
-  return `${value.slice(0, visible)}...${value.slice(-visible)}`;
-}
-
-function CopyableValue({ label, value, href, copiedKey, copiedField, onCopy }) {
-  if (!value) return formatValue(value);
-
-  return (
-    <span className="copy-row">
-      {href ? (
-        <a href={href} target="_blank" rel="noreferrer" title={value}>
-          {truncateMiddle(value)}
-        </a>
-      ) : (
-        <span className="hash-value" title={value}>
-          {truncateMiddle(value)}
-        </span>
-      )}
-      <button
-        type="button"
-        className="button button-outline button-small"
-        onClick={() => onCopy(copiedKey, value)}
-      >
-        {copiedField === copiedKey ? "Copied" : `Copy ${label}`}
-      </button>
-    </span>
-  );
-}
-
 export default function VerifyCertificate() {
   const { certificateId } = useParams();
   const [certificate, setCertificate] = useState(null);
@@ -245,7 +235,6 @@ export default function VerifyCertificate() {
   const [notFound, setNotFound] = useState(false);
   const [certificateError, setCertificateError] = useState("");
   const [organizationWarning, setOrganizationWarning] = useState("");
-  const [copiedField, setCopiedField] = useState("");
   const [pdfLoading, setPdfLoading] = useState(false);
   const toast = useToast();
   const [blockchainCheck, setBlockchainCheck] = useState({
@@ -394,18 +383,6 @@ export default function VerifyCertificate() {
     };
   }, [certificate]);
 
-  const copyValue = async (key, value) => {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopiedField(key);
-      toast.success("Value copied.");
-      window.setTimeout(() => setCopiedField(""), 2000);
-    } catch (err) {
-      console.error(err);
-      toast.error("Could not copy this value.");
-    }
-  };
-
   const downloadCertificate = async ({
     blockchainResult,
     hashMatch,
@@ -529,10 +506,11 @@ export default function VerifyCertificate() {
   const firestoreStatus = certificate?.status || "unknown";
   const isBulk = isBulkCertificate(certificate);
   const blockchainResult = getBlockchainResult({ blockchainCheck, certificate });
+  const blockchainUnavailable = blockchainResult === BLOCKCHAIN_RESULT.FAILED;
   const isOnChainRevoked = Boolean(blockchainCheck.onChain?.revoked);
   const isRevoked = firestoreStatus === "revoked" || isOnChainRevoked;
   const hashMatch =
-    isBulk || blockchainCheck.onChain
+    blockchainCheck.checked && (isBulk || blockchainCheck.onChain)
       ? getHashMatch({
           certificate,
           computedHash: blockchainCheck.computedHash,
@@ -558,7 +536,8 @@ export default function VerifyCertificate() {
   const canDownloadCertificate =
     Boolean(certificate?.certificateId || certificate?.id) &&
     (heroState.title === "VALID CERTIFICATE" ||
-      heroState.title === "REVOKED ON BLOCKCHAIN");
+      heroState.title === "REVOKED CERTIFICATE");
+  const ipfsBadge = getIpfsBadge(certificate);
 
   const certificateRows = [
     ["Certificate ID", certificate?.certificateId || certificate?.id],
@@ -570,93 +549,78 @@ export default function VerifyCertificate() {
     ["Issued By Email", certificate?.issuedByEmail],
   ];
 
-  const proofRows = [
-    ["Issuance Mode", certificate?.issuanceMode || "single"],
-    ["Firestore Status", certificate?.status],
-    ["Blockchain Status", certificate?.blockchainStatus],
-    ["Blockchain Verification Result", blockchainResult],
-    ["Hash Match", hashMatch === null ? "-" : hashMatch ? "Yes" : "No"],
-    ["Merkle Proof", isBulk ? merkleProofText : "-"],
-    ["Batch ID", isBulk ? certificate?.batchId : "-"],
-    ["Batch Root", isBulk ? certificate?.batchRoot : "-"],
-    ["Batch Index", isBulk ? certificate?.batchIndex : "-"],
-    ["Batch Size", isBulk ? certificate?.batchSize : "-"],
-    ["Batch Tx Hash", isBulk ? certificate?.blockchainTxHash : "-"],
-    [
-      isBulk ? "On-chain Batch Exists" : "On-chain Exists",
-      blockchainCheck.onChain
-        ? blockchainCheck.onChain.exists
-          ? "Yes"
-          : "No"
-        : "-",
-    ],
-    [
-      isBulk ? "On-chain Batch Revoked" : "On-chain Revoked",
-      blockchainCheck.onChain
-        ? blockchainCheck.onChain.revoked
-          ? "Yes"
-          : "No"
-        : "-",
-    ],
-    ["Blockchain Revocation Status", certificate?.blockchainRevocationStatus],
-    ["Revoke Block Number", certificate?.revokeBlockNumber],
-    ["Blockchain Revoked At", certificate?.blockchainRevokedAt],
-    [
-      "Blockchain Revoked By Address",
-      certificate?.blockchainRevokedByAddress,
-    ],
-    ["Block Number", certificate?.blockNumber],
-    [
-      isBulk ? "On-chain Batch Root" : "On-chain Hash",
-      isBulk
-        ? blockchainCheck.onChain?.batchRoot
-        : blockchainCheck.onChain?.certificateHash,
-    ],
-    ["On-chain Issuer", blockchainCheck.onChain?.issuer],
-    ["On-chain Issued At", blockchainCheck.onChain?.issuedAt],
-    ["On-chain Revoked At", blockchainCheck.onChain?.revokedAt],
-    ["On-chain IPFS CID", isBulk ? "-" : blockchainCheck.onChain?.ipfsCid],
-    ["IPFS Status", certificate?.ipfsStatus],
-    ["IPFS CID", certificate?.ipfsCid],
-    ["IPFS Gateway URL", certificate?.ipfsGatewayUrl],
-    ["Blockchain Check Error", blockchainCheck.error],
+  const statusCards = [
+    {
+      label: "Firestore",
+      value: `Firestore ${formatValue(certificate?.status)}`,
+      badgeValue: certificate?.status,
+      positiveValues: ["issued"],
+    },
+    ...(blockchainUnavailable
+      ? []
+      : [
+          {
+            label: isBulk ? "Batch Anchor" : "Blockchain",
+            value: blockchainResult,
+            badgeValue:
+              blockchainResult === BLOCKCHAIN_RESULT.VERIFIED ||
+              blockchainResult === BLOCKCHAIN_RESULT.BATCH_ANCHORED
+                ? "confirmed"
+                : blockchainResult,
+            positiveValues: ["confirmed"],
+          },
+        ]),
+    {
+      label: "Hash Integrity",
+      value: hashBadgeText,
+      badgeValue: hashBadgeValue,
+      positiveValues: ["yes"],
+    },
+    ...(isBulk
+      ? [
+          {
+            label: "Merkle Proof",
+            value: merkleProofText,
+            badgeValue: getMerkleProofBadgeValue(blockchainCheck.merkleProofValid),
+            positiveValues: ["confirmed"],
+          },
+        ]
+      : []),
+    ...(ipfsBadge
+      ? [
+          {
+            label: "IPFS",
+            value: ipfsBadge.text,
+            badgeValue: ipfsBadge.value,
+            positiveValues: ["uploaded"],
+          },
+        ]
+      : []),
+    {
+      label: "Revocation",
+      value: isRevoked ? "Revoked" : "Not Revoked",
+      badgeValue: isRevoked ? "revoked" : "active",
+      positiveValues: ["active"],
+    },
   ];
+
+  const renderStatusBadges = () => (
+    <div className="badge-row">
+      {statusCards.map(({ label, value, badgeValue, positiveValues }) => (
+        <span
+          key={label}
+          className={getBadgeClass(badgeValue, positiveValues)}
+        >
+          {value}
+        </span>
+      ))}
+    </div>
+  );
 
   return renderPublicShell(
     <div className="grid">
       <section className={heroState.className}>
-        <div className="badge-row">
-          <span className={getBadgeClass(firestoreStatus, ["issued"])}>
-            Firestore {firestoreStatus}
-          </span>
-          <span
-            className={getBadgeClass(
-              blockchainResult === BLOCKCHAIN_RESULT.VERIFIED ||
-                blockchainResult === BLOCKCHAIN_RESULT.BATCH_ANCHORED
-                ? "confirmed"
-                : blockchainResult,
-              ["confirmed"],
-            )}
-          >
-            {blockchainResult}
-          </span>
-          <span className={getBadgeClass(hashBadgeValue, ["yes"])}>
-            {hashBadgeText}
-          </span>
-          {isBulk ? (
-            <span
-              className={getBadgeClass(
-                getMerkleProofBadgeValue(blockchainCheck.merkleProofValid),
-                ["confirmed"],
-              )}
-            >
-              {merkleProofText}
-            </span>
-          ) : null}
-          <span className={getBadgeClass(isRevoked ? "revoked" : "active", ["active"])}>
-            {isRevoked ? "Revoked" : "Not Revoked"}
-          </span>
-        </div>
+        {renderStatusBadges()}
 
         <h1>{heroState.title}</h1>
         <p className="muted">
@@ -698,6 +662,12 @@ export default function VerifyCertificate() {
       </section>
 
       {organizationWarning ? <div className="alert">{organizationWarning}</div> : null}
+      {blockchainUnavailable ? (
+        <div className="alert">
+          Blockchain check is temporarily unavailable. Certificate record is still
+          shown from Firestore.
+        </div>
+      ) : null}
       <div className="grid grid-two">
         <section className="card">
           <h2>Certificate Info</h2>
@@ -712,197 +682,19 @@ export default function VerifyCertificate() {
         </section>
 
         <section className="card">
-          <h2>Trust Proof</h2>
-          <div className="badge-row" style={{ marginBottom: 14 }}>
-            <span className={getBadgeClass(firestoreStatus, ["issued"])}>
-              Firestore
-            </span>
-            <span
-              className={getBadgeClass(
-                blockchainResult === BLOCKCHAIN_RESULT.VERIFIED ||
-                  blockchainResult === BLOCKCHAIN_RESULT.BATCH_ANCHORED
-                  ? "confirmed"
-                  : blockchainResult,
-                ["confirmed"],
-              )}
-            >
-              Blockchain
-            </span>
-            <span className={getBadgeClass(hashBadgeValue, ["yes"])}>
-              Hash
-            </span>
-            {isBulk ? (
-              <span
-                className={getBadgeClass(
-                  getMerkleProofBadgeValue(blockchainCheck.merkleProofValid),
-                  ["confirmed"],
-                )}
-              >
-                Merkle
-              </span>
-            ) : null}
-          </div>
+          <h2>Status Checks</h2>
+          {renderStatusBadges()}
 
           <div className="proof-card-grid">
-            <article className="proof-card">
-              <span>Firestore</span>
-              <strong>{formatValue(certificate?.status)}</strong>
-            </article>
-            <article className="proof-card">
-              <span>{isBulk ? "Batch Root" : "Blockchain"}</span>
-              <strong>{blockchainResult}</strong>
-            </article>
-            <article className="proof-card">
-              <span>Hash Integrity</span>
-              <strong>{hashBadgeText}</strong>
-            </article>
-            {isBulk ? (
-              <article className="proof-card">
-                <span>Merkle Proof</span>
-                <strong>{merkleProofText}</strong>
+            {statusCards.map(({ label, value }) => (
+              <article className="proof-card" key={label}>
+                <span>{label}</span>
+                <strong>{value}</strong>
               </article>
-            ) : null}
+            ))}
           </div>
-
-          <dl className="detail-list">
-            <div className="detail-row">
-              <dt>{isBulk ? "Batch Tx Hash" : "Blockchain Tx Hash"}</dt>
-              <dd>
-                <CopyableValue
-                  label="Tx"
-                  value={certificate?.blockchainTxHash}
-                  href={getTxLink(certificate?.blockchainTxHash)}
-                  copiedKey="tx"
-                  copiedField={copiedField}
-                  onCopy={copyValue}
-                />
-              </dd>
-            </div>
-
-            {isBulk ? (
-              <>
-                <div className="detail-row">
-                  <dt>Batch ID</dt>
-                  <dd className="hash-value">{formatValue(certificate?.batchId)}</dd>
-                </div>
-                <div className="detail-row">
-                  <dt>Batch Root</dt>
-                  <dd className="hash-value">{formatValue(certificate?.batchRoot)}</dd>
-                </div>
-                <div className="detail-row">
-                  <dt>Batch Index</dt>
-                  <dd>{formatValue(certificate?.batchIndex)}</dd>
-                </div>
-                <div className="detail-row">
-                  <dt>Batch Size</dt>
-                  <dd>{formatValue(certificate?.batchSize)}</dd>
-                </div>
-              </>
-            ) : null}
-
-            <div className="detail-row">
-              <dt>Revoke Tx Hash</dt>
-              <dd>
-                <CopyableValue
-                  label="Revoke Tx"
-                  value={certificate?.revokeTxHash}
-                  href={getTxLink(certificate?.revokeTxHash)}
-                  copiedKey="revokeTx"
-                  copiedField={copiedField}
-                  onCopy={copyValue}
-                />
-              </dd>
-            </div>
-
-            <div className="detail-row">
-              <dt>Contract Address</dt>
-              <dd>
-                <CopyableValue
-                  label="Contract"
-                  value={certificate?.contractAddress}
-                  copiedKey="contract"
-                  copiedField={copiedField}
-                  onCopy={copyValue}
-                />
-              </dd>
-            </div>
-
-            <div className="detail-row">
-              <dt>IPFS CID</dt>
-              <dd>
-                <CopyableValue
-                  label="IPFS CID"
-                  value={certificate?.ipfsCid}
-                  copiedKey="ipfsCid"
-                  copiedField={copiedField}
-                  onCopy={copyValue}
-                />
-              </dd>
-            </div>
-
-            <div className="detail-row">
-              <dt>IPFS Gateway</dt>
-              <dd>
-                <CopyableValue
-                  label="IPFS Link"
-                  value={certificate?.ipfsGatewayUrl}
-                  href={certificate?.ipfsGatewayUrl}
-                  copiedKey="ipfsGateway"
-                  copiedField={copiedField}
-                  onCopy={copyValue}
-                />
-              </dd>
-            </div>
-
-            <div className="detail-row">
-              <dt>Firestore Hash</dt>
-              <dd className="hash-value">{formatValue(certificate?.certificateHash)}</dd>
-            </div>
-
-            <div className="detail-row">
-              <dt>Computed Hash</dt>
-              <dd className="hash-value">
-                {formatValue(blockchainCheck.computedHash)}
-              </dd>
-            </div>
-
-            <div className="detail-row">
-              <dt>{isBulk ? "On-chain Batch Root" : "On-chain Hash"}</dt>
-              <dd className="hash-value">
-                {formatValue(
-                  isBulk
-                    ? blockchainCheck.onChain?.batchRoot
-                    : blockchainCheck.onChain?.certificateHash,
-                )}
-              </dd>
-            </div>
-          </dl>
         </section>
       </div>
-
-      <section className="card">
-        <div className="section-header">
-          <div>
-            <h2>Verification Details</h2>
-            <p className="muted">
-              Full Firestore and Polygon Amoy verification fields.
-            </p>
-          </div>
-        </div>
-
-        <div className="table-container">
-          <table className="table">
-            <tbody>
-              {proofRows.map(([label, value]) => (
-                <tr key={label}>
-                  <th>{label}</th>
-                  <td className="hash-value">{formatValue(value)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
     </div>,
   );
 }
