@@ -200,7 +200,7 @@ function truncateMiddle(value = "", visible = 10) {
 function getStatusBadge(status = "unknown") {
   const normalized = status.toLowerCase();
 
-  if (["issued", "confirmed", "active", "sent"].includes(normalized)) {
+  if (["issued", "confirmed", "active", "sent", "uploaded"].includes(normalized)) {
     return "badge badge-success";
   }
 
@@ -266,6 +266,7 @@ function CertificateTable({
                 <th>Firestore</th>
                 <th>Blockchain</th>
                 <th>Email</th>
+                <th>IPFS</th>
                 <th>Verify</th>
                 <th>Revoke</th>
               </tr>
@@ -348,6 +349,27 @@ function CertificateTable({
                       ) : (
                         "-"
                       )}
+                    </td>
+                    <td>
+                      <div className="proof-cell">
+                        {certificate.ipfsStatus ? (
+                          <span className={getStatusBadge(certificate.ipfsStatus)}>
+                            {certificate.ipfsStatus}
+                          </span>
+                        ) : (
+                          "-"
+                        )}
+                        {certificate.ipfsGatewayUrl ? (
+                          <a
+                            href={certificate.ipfsGatewayUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            title={certificate.ipfsCid || certificate.ipfsGatewayUrl}
+                          >
+                            IPFS {truncateMiddle(certificate.ipfsCid || "metadata")}
+                          </a>
+                        ) : null}
+                      </div>
                     </td>
                     <td>
                       <div className="action-group">

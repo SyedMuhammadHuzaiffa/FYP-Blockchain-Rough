@@ -617,6 +617,8 @@ export default function VerifyCertificate() {
     ["On-chain Revoked At", blockchainCheck.onChain?.revokedAt],
     ["On-chain IPFS CID", isBulk ? "-" : blockchainCheck.onChain?.ipfsCid],
     ["IPFS Status", certificate?.ipfsStatus],
+    ["IPFS CID", certificate?.ipfsCid],
+    ["IPFS Gateway URL", certificate?.ipfsGatewayUrl],
     ["Blockchain Check Error", blockchainCheck.error],
   ];
 
@@ -819,6 +821,33 @@ export default function VerifyCertificate() {
                   label="Contract"
                   value={certificate?.contractAddress}
                   copiedKey="contract"
+                  copiedField={copiedField}
+                  onCopy={copyValue}
+                />
+              </dd>
+            </div>
+
+            <div className="detail-row">
+              <dt>IPFS CID</dt>
+              <dd>
+                <CopyableValue
+                  label="IPFS CID"
+                  value={certificate?.ipfsCid}
+                  copiedKey="ipfsCid"
+                  copiedField={copiedField}
+                  onCopy={copyValue}
+                />
+              </dd>
+            </div>
+
+            <div className="detail-row">
+              <dt>IPFS Gateway</dt>
+              <dd>
+                <CopyableValue
+                  label="IPFS Link"
+                  value={certificate?.ipfsGatewayUrl}
+                  href={certificate?.ipfsGatewayUrl}
+                  copiedKey="ipfsGateway"
                   copiedField={copiedField}
                   onCopy={copyValue}
                 />

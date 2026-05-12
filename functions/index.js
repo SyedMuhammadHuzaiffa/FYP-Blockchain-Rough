@@ -14,6 +14,9 @@ const {
 const {
   sendCertificateEmail,
 } = require("./email/certificateEmail");
+const {
+  uploadCertificateMetadataToIpfs,
+} = require("./ipfs/pinata");
 
 if (admin.apps.length === 0) {
   admin.initializeApp();
@@ -29,6 +32,7 @@ const CERTIFICATE_REGISTRY_ADDRESS = defineSecret(
   "CERTIFICATE_REGISTRY_ADDRESS",
 );
 const BLOCKCHAIN_CHAIN_ID = defineSecret("BLOCKCHAIN_CHAIN_ID");
+const PINATA_JWT = defineSecret("PINATA_JWT");
 const MAX_BULK_CERTIFICATES = 200;
 
 // =============================
@@ -278,6 +282,64 @@ async function sendAndRecordCertificateEmail({
     return {
       status: "failed",
       error: emailError,
+    };
+  }
+}
+
+async function uploadAndRecordCertificateMetadata({
+  certificateRef,
+  certificate,
+  verificationBaseUrl,
+  createdAtIso,
+}) {
+  try {
+    const ipfsResult = await uploadCertificateMetadataToIpfs(certificate, {
+      pinataJwt: PINATA_JWT.value(),
+      verificationBaseUrl,
+      createdAtIso,
+    });
+
+    try {
+      await certificateRef.update({
+        ipfsStatus: "uploaded",
+        ipfsCid: ipfsResult.ipfsCid,
+        ipfsGatewayUrl: ipfsResult.ipfsGatewayUrl,
+        ipfsProvider: ipfsResult.ipfsProvider,
+        ipfsUploadedAt: timestamp(),
+        ipfsError: null,
+        updatedAt: timestamp(),
+      });
+    } catch (recordError) {
+      console.error("Failed to record uploaded IPFS metadata:", recordError);
+    }
+
+    return {
+      status: "uploaded",
+      ...ipfsResult,
+      error: null,
+    };
+  } catch (error) {
+    const ipfsError = getErrorMessage(error);
+
+    console.error("uploadCertificateMetadataToIpfs error:", error);
+
+    try {
+      await certificateRef.update({
+        ipfsStatus: "failed",
+        ipfsError,
+        ipfsUploadedAt: null,
+        updatedAt: timestamp(),
+      });
+    } catch (recordError) {
+      console.error("Failed to record failed IPFS metadata upload:", recordError);
+    }
+
+    return {
+      status: "failed",
+      ipfsCid: null,
+      ipfsGatewayUrl: null,
+      ipfsProvider: null,
+      error: ipfsError,
     };
   }
 }
@@ -1093,6 +1155,7 @@ exports.issueCertificate = onCall(
       CERTIFICATE_REGISTRY_ADDRESS,
       BLOCKCHAIN_CHAIN_ID,
       "SENDGRID_API_KEY",
+      PINATA_JWT,
     ],
   },
   async (request) => {
@@ -1138,6 +1201,7 @@ exports.issueCertificate = onCall(
         : "";
       const certificateRef = db.collection("certificates").doc();
       const certificateId = certificateRef.id;
+      const createdAtIso = new Date().toISOString();
       const certificateData = {
         certificateId,
         studentName: normalizedStudentName,
@@ -1177,6 +1241,11 @@ exports.issueCertificate = onCall(
 
       let blockchainStatus = "pending";
       let blockchainError = null;
+      let blockchainTxHash = null;
+      let blockchainChainId = null;
+      let contractAddress = null;
+      let blockNumber = null;
+      let blockchainIssuerAddress = null;
 
       try {
         const anchorResult = await anchorCertificateOnChain({
@@ -1215,6 +1284,11 @@ exports.issueCertificate = onCall(
 
         await successBatch.commit();
         blockchainStatus = "confirmed";
+        blockchainTxHash = anchorResult.txHash;
+        blockchainChainId = anchorResult.chainId;
+        contractAddress = anchorResult.contractAddress;
+        blockNumber = anchorResult.blockNumber;
+        blockchainIssuerAddress = anchorResult.issuerAddress;
       } catch (anchorError) {
         blockchainStatus = "failed";
         blockchainError = getErrorMessage(anchorError);
@@ -1242,6 +1316,23 @@ exports.issueCertificate = onCall(
         await failureBatch.commit();
       }
 
+      const ipfsResult = await uploadAndRecordCertificateMetadata({
+        certificateRef,
+        certificate: {
+          ...certificateData,
+          organizationName,
+          certificateHash,
+          blockchainStatus,
+          blockchainTxHash,
+          blockchainChainId,
+          contractAddress,
+          blockNumber,
+          blockchainIssuerAddress,
+        },
+        verificationBaseUrl: getVerificationBaseUrl(request),
+        createdAtIso,
+      });
+
       const emailResult = await sendAndRecordCertificateEmail({
         certificateRef,
         certificate: {
@@ -1250,6 +1341,9 @@ exports.issueCertificate = onCall(
           certificateHash,
           blockchainStatus,
           blockchainError,
+          ipfsCid: ipfsResult.ipfsCid,
+          ipfsGatewayUrl: ipfsResult.ipfsGatewayUrl,
+          ipfsProvider: ipfsResult.ipfsProvider,
         },
         verificationBaseUrl: getVerificationBaseUrl(request),
       });
@@ -1260,6 +1354,10 @@ exports.issueCertificate = onCall(
         certificateHash,
         blockchainStatus,
         blockchainError,
+        ipfsStatus: ipfsResult.status,
+        ipfsCid: ipfsResult.ipfsCid,
+        ipfsGatewayUrl: ipfsResult.ipfsGatewayUrl,
+        ipfsError: ipfsResult.error,
         emailStatus: emailResult.status,
         emailError: emailResult.error,
         message: "Certificate issued successfully",
@@ -1288,6 +1386,7 @@ exports.issueBulkCertificates = onCall(
       CERTIFICATE_REGISTRY_ADDRESS,
       BLOCKCHAIN_CHAIN_ID,
       "SENDGRID_API_KEY",
+      PINATA_JWT,
     ],
   },
   async (request) => {
@@ -1367,6 +1466,7 @@ exports.issueBulkCertificates = onCall(
 
       const batchRef = db.collection("certificateBatches").doc();
       const batchId = batchRef.id;
+      const createdAtIso = new Date().toISOString();
       const certificateRows = normalizedRows.map((row) => {
         const certificateRef = db.collection("certificates").doc();
         const certificateId = certificateRef.id;
@@ -1443,6 +1543,11 @@ exports.issueBulkCertificates = onCall(
 
       let blockchainStatus = "pending";
       let blockchainError = null;
+      let blockchainTxHash = null;
+      let blockchainChainId = null;
+      let contractAddress = null;
+      let blockNumber = null;
+      let blockchainIssuerAddress = null;
 
       try {
         const anchorResult = await anchorBatchOnChain({
@@ -1495,6 +1600,11 @@ exports.issueBulkCertificates = onCall(
 
         await successBatch.commit();
         blockchainStatus = "confirmed";
+        blockchainTxHash = anchorResult.txHash;
+        blockchainChainId = anchorResult.chainId;
+        contractAddress = anchorResult.contractAddress;
+        blockNumber = anchorResult.blockNumber;
+        blockchainIssuerAddress = anchorResult.issuerAddress;
       } catch (anchorError) {
         blockchainStatus = "failed";
         blockchainError = getErrorMessage(anchorError);
@@ -1532,8 +1642,52 @@ exports.issueBulkCertificates = onCall(
         await failureBatch.commit();
       }
 
+      const ipfsResults = await Promise.all(
+        certificateRows.map(
+          ({ certificateRef, certificateData, certificateHash }, index) =>
+            uploadAndRecordCertificateMetadata({
+              certificateRef,
+              certificate: {
+                ...certificateData,
+                certificateHash,
+                batchId,
+                batchRoot: merkleBatch.root,
+                batchProof: merkleBatch.proofs[index],
+                batchIndex: index,
+                batchSize: merkleBatch.size,
+                issuanceMode: "bulk",
+                blockchainStatus,
+                blockchainTxHash,
+                blockchainChainId,
+                contractAddress,
+                blockNumber,
+                blockchainIssuerAddress,
+              },
+              verificationBaseUrl: getVerificationBaseUrl(request),
+              createdAtIso,
+            }),
+        ),
+      );
+      const ipfsUploaded = ipfsResults.filter(
+        (ipfsResult) => ipfsResult.status === "uploaded",
+      ).length;
+      const ipfsFailed = ipfsResults.length - ipfsUploaded;
+
+      await batchRef
+        .update({
+          ipfsUploaded,
+          ipfsFailed,
+          updatedAt: timestamp(),
+        })
+        .catch((ipfsSummaryError) => {
+          console.error(
+            "Failed to record certificate batch IPFS summary:",
+            ipfsSummaryError,
+          );
+        });
+
       const emailResults = await Promise.all(
-        certificateRows.map(({ certificateRef, certificateData, certificateHash }) =>
+        certificateRows.map(({ certificateRef, certificateData, certificateHash }, index) =>
           sendAndRecordCertificateEmail({
             certificateRef,
             certificate: {
@@ -1545,6 +1699,9 @@ exports.issueBulkCertificates = onCall(
               issuanceMode: "bulk",
               blockchainStatus,
               blockchainError,
+              ipfsCid: ipfsResults[index]?.ipfsCid,
+              ipfsGatewayUrl: ipfsResults[index]?.ipfsGatewayUrl,
+              ipfsProvider: ipfsResults[index]?.ipfsProvider,
             },
             verificationBaseUrl: getVerificationBaseUrl(request),
           }),
@@ -1576,6 +1733,8 @@ exports.issueBulkCertificates = onCall(
         certificateIds,
         blockchainStatus,
         blockchainError,
+        ipfsUploaded,
+        ipfsFailed,
         emailsSent,
         emailsFailed,
         message: "Bulk certificates created successfully",

@@ -25,6 +25,11 @@ function getCertificateIdentifier(certificate) {
   return certificate?.certificateId || certificate?.id || "";
 }
 
+function truncateMiddle(value = "", visible = 10) {
+  if (!value || value.length <= visible * 2 + 3) return value;
+  return `${value.slice(0, visible)}...${value.slice(-visible)}`;
+}
+
 function getVerifyLink(certificateId) {
   return `${window.location.origin}/verify/${certificateId}`;
 }
@@ -96,6 +101,24 @@ function getBlockchainBadge(status = "pending") {
   }
 
   if (["failed", "error"].includes(normalized)) {
+    return "badge badge-error";
+  }
+
+  if (["pending", "processing"].includes(normalized)) {
+    return "badge badge-warning";
+  }
+
+  return "badge";
+}
+
+function getIpfsBadge(status = "pending") {
+  const normalized = status.toLowerCase();
+
+  if (normalized === "uploaded") {
+    return "badge badge-success";
+  }
+
+  if (normalized === "failed") {
     return "badge badge-error";
   }
 
@@ -421,6 +444,7 @@ export default function StudentDashboard({ user, role }) {
                     <th>Organization</th>
                     <th>Status</th>
                     <th>Blockchain</th>
+                    <th>IPFS</th>
                     <th>Verification</th>
                     <th>Actions</th>
                   </tr>
@@ -481,6 +505,27 @@ export default function StudentDashboard({ user, role }) {
                           >
                             {certificate.blockchainStatus || "pending"}
                           </span>
+                        </td>
+                        <td>
+                          <div className="proof-cell">
+                            {certificate.ipfsStatus ? (
+                              <span className={getIpfsBadge(certificate.ipfsStatus)}>
+                                {certificate.ipfsStatus}
+                              </span>
+                            ) : (
+                              "-"
+                            )}
+                            {certificate.ipfsGatewayUrl ? (
+                              <a
+                                href={certificate.ipfsGatewayUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                title={certificate.ipfsCid || certificate.ipfsGatewayUrl}
+                              >
+                                IPFS {truncateMiddle(certificate.ipfsCid || "metadata")}
+                              </a>
+                            ) : null}
+                          </div>
                         </td>
                         <td>
                           <span className={verificationStatus.className}>

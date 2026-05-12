@@ -47,6 +47,7 @@ async function sendCertificateEmail({ certificate, verificationBaseUrl }) {
   const organizationName = certificate?.organizationName || "your organization";
   const blockchainStatus = certificate?.blockchainStatus || "pending";
   const issueDate = certificate?.issueDate || "-";
+  const ipfsGatewayUrl = certificate?.ipfsGatewayUrl || "";
 
   sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
@@ -88,6 +89,15 @@ async function sendCertificateEmail({ certificate, verificationBaseUrl }) {
               Use the public verification page to verify this certificate on blockchain.
               Open verification page to download certificate PDF.
             </p>
+
+            ${
+              ipfsGatewayUrl
+                ? `<p style="margin:0 0 16px;line-height:1.6;">
+                    Metadata JSON is available on IPFS:
+                    <a href="${escapeHtml(ipfsGatewayUrl)}" style="color:#6750a4;">${escapeHtml(ipfsGatewayUrl)}</a>
+                  </p>`
+                : ""
+            }
 
             <p style="margin:22px 0;">
               <a href="${escapeHtml(verificationUrl)}"
