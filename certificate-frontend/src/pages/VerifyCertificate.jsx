@@ -5,6 +5,7 @@ import { db } from "../firebase";
 import { computeCertificateHash } from "../blockchain/certificateHash";
 import { verifyCertificateOnChain } from "../blockchain/verifyCertificateOnChain";
 import { ThemeToggle } from "../components/ThemeProvider";
+import { generateCertificatePdf } from "../utils/certificatePdf";
 
 const AMOY_TX_BASE_URL = "https://amoy.polygonscan.com/tx/";
 
@@ -165,6 +166,7 @@ export default function VerifyCertificate() {
   const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState("");
   const [copiedField, setCopiedField] = useState("");
+  const [pdfLoading, setPdfLoading] = useState(false);
   const [blockchainCheck, setBlockchainCheck] = useState({
     loading: false,
     checked: false,
@@ -298,6 +300,45 @@ export default function VerifyCertificate() {
     }
   };
 
+  const downloadCertificate = async ({
+    blockchainResult,
+    hashMatch,
+    isRevoked,
+  }) => {
+    const currentCertificateId = certificate?.certificateId || certificate?.id;
+
+    if (!currentCertificateId || !certificate?.studentName || !certificate?.courseName) {
+      setError("This certificate does not have enough data to generate a PDF.");
+      return;
+    }
+
+    setPdfLoading(true);
+    setError("");
+
+    try {
+      await generateCertificatePdf(
+        {
+          ...certificate,
+          certificateId: currentCertificateId,
+          organizationName: organizationName || certificate?.organizationId,
+        },
+        {
+          organizationName: organizationName || certificate?.organizationId,
+          blockchainResult,
+          computedHash: blockchainCheck.computedHash,
+          onChain: blockchainCheck.onChain,
+          hashMatch,
+          isRevoked,
+        },
+      );
+    } catch (err) {
+      console.error(err);
+      setError("Could not generate the certificate PDF. Please try again.");
+    } finally {
+      setPdfLoading(false);
+    }
+  };
+
   const renderPublicShell = (children) => (
     <main className="public-shell">
       <div className="public-topbar">
@@ -359,6 +400,12 @@ export default function VerifyCertificate() {
     hashMatch,
     isRevoked,
   });
+  const canDownloadCertificate =
+    Boolean(certificate?.certificateId || certificate?.id) &&
+    Boolean(certificate?.studentName) &&
+    Boolean(certificate?.courseName) &&
+    (heroState.title === "VALID CERTIFICATE" ||
+      heroState.title === "REVOKED ON BLOCKCHAIN");
 
   const certificateRows = [
     ["Certificate ID", certificate?.certificateId || certificate?.id],
@@ -436,6 +483,24 @@ export default function VerifyCertificate() {
         <p className="muted">
           Certificate ID: {certificate?.certificateId || certificate?.id}
         </p>
+        {canDownloadCertificate ? (
+          <div className="button-row" style={{ marginTop: 18 }}>
+            <button
+              type="button"
+              onClick={() =>
+                downloadCertificate({
+                  blockchainResult,
+                  hashMatch,
+                  isRevoked,
+                })
+              }
+              disabled={pdfLoading}
+              className="button button-tonal"
+            >
+              {pdfLoading ? "Generating PDF..." : "Download Certificate PDF"}
+            </button>
+          </div>
+        ) : null}
       </section>
 
       {error ? <div className="alert alert-error">{error}</div> : null}

@@ -5,6 +5,7 @@ import { collection, doc, getDoc, getDocs, query, where } from "firebase/firesto
 import { httpsCallable } from "firebase/functions";
 import { db, functions } from "../firebase";
 import AppLayout from "../components/AppLayout";
+import { generateCertificatePdf } from "../utils/certificatePdf";
 
 const emptyTeacherForm = {
   name: "",
@@ -84,9 +85,12 @@ function CertificateTable({
   certificates,
   loading,
   copiedCertificateId,
+  downloadingCertificateId,
+  organizationName,
   revokingCertificateId,
   onRefresh,
   onCopy,
+  onDownload,
   onOpenQr,
   onRevoke,
 }) {
@@ -136,6 +140,7 @@ function CertificateTable({
                 const isCopied = copiedCertificateId === certificateId;
                 const isRevoked = certificate.status === "revoked";
                 const isRevoking = revokingCertificateId === certificateId;
+                const isDownloading = downloadingCertificateId === certificateId;
 
                 return (
                   <tr key={certificate.id}>
@@ -220,6 +225,19 @@ function CertificateTable({
                         >
                           QR
                         </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onDownload({
+                              ...certificate,
+                              organizationName,
+                            })
+                          }
+                          disabled={isDownloading}
+                          className="button button-outline button-small"
+                        >
+                          {isDownloading ? "Generating..." : "Download PDF"}
+                        </button>
                       </div>
                     </td>
                     <td>
@@ -261,6 +279,7 @@ export default function OrgAdminDashboard({ user }) {
   const [issuingCertificate, setIssuingCertificate] = useState(false);
   const [revokingTeacherId, setRevokingTeacherId] = useState("");
   const [revokingCertificateId, setRevokingCertificateId] = useState("");
+  const [downloadingCertificateId, setDownloadingCertificateId] = useState("");
   const [copiedCertificateId, setCopiedCertificateId] = useState("");
   const [qrCertificate, setQrCertificate] = useState(null);
   const [error, setError] = useState("");
@@ -424,6 +443,36 @@ export default function OrgAdminDashboard({ user }) {
     } catch (err) {
       console.error(err);
       setError("Could not copy verify link. Please copy it from the link.");
+    }
+  };
+
+  const downloadCertificate = async (certificate) => {
+    const currentCertificateId = getCertificateIdentifier(certificate);
+
+    if (!currentCertificateId) {
+      setError("Certificate ID is missing. PDF cannot be generated.");
+      return;
+    }
+
+    setDownloadingCertificateId(currentCertificateId);
+    setError("");
+    setSuccess("");
+
+    try {
+      await generateCertificatePdf(
+        {
+          ...certificate,
+          certificateId: currentCertificateId,
+          organizationName,
+        },
+        { organizationName },
+      );
+      setSuccess("Certificate PDF downloaded.");
+    } catch (err) {
+      console.error(err);
+      setError("Could not generate the certificate PDF. Please try again.");
+    } finally {
+      setDownloadingCertificateId("");
     }
   };
 
@@ -729,9 +778,12 @@ export default function OrgAdminDashboard({ user }) {
               certificates={certificates}
               loading={certificatesLoading}
               copiedCertificateId={copiedCertificateId}
+              downloadingCertificateId={downloadingCertificateId}
+              organizationName={organizationName}
               revokingCertificateId={revokingCertificateId}
               onRefresh={() => fetchCertificates(user.uid)}
               onCopy={copyVerifyLink}
+              onDownload={downloadCertificate}
               onOpenQr={setQrCertificate}
               onRevoke={revokeCertificate}
             />

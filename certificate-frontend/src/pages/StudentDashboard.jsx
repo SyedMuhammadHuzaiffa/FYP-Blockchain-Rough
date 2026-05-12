@@ -5,6 +5,7 @@ import { collection, doc, getDoc, getDocs, query, where } from "firebase/firesto
 
 import Navbar from "../components/Navbar";
 import { db } from "../firebase";
+import { generateCertificatePdf } from "../utils/certificatePdf";
 
 function formatValue(value) {
   if (value === undefined || value === null || value === "") {
@@ -122,6 +123,7 @@ export default function StudentDashboard({ user, role }) {
   const [success, setSuccess] = useState("");
   const [copiedField, setCopiedField] = useState("");
   const [qrCertificate, setQrCertificate] = useState(null);
+  const [downloadingCertificateId, setDownloadingCertificateId] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
 
@@ -263,6 +265,43 @@ export default function StudentDashboard({ user, role }) {
     }
   };
 
+  const downloadCertificate = async (certificate) => {
+    const certificateId = getCertificateIdentifier(certificate);
+
+    if (!certificateId) {
+      setError("Certificate ID is missing. PDF cannot be generated.");
+      return;
+    }
+
+    const organizationName =
+      organizationNames[certificate.organizationId] ||
+      certificate.organizationName ||
+      certificate.organizationId ||
+      "";
+
+    setDownloadingCertificateId(certificateId);
+    setError("");
+    setSuccess("");
+
+    try {
+      await generateCertificatePdf(
+        {
+          ...certificate,
+          certificateId,
+          organizationName,
+        },
+        { organizationName },
+      );
+      setSuccess("Certificate PDF downloaded.");
+      window.setTimeout(() => setSuccess(""), 2200);
+    } catch (err) {
+      console.error(err);
+      setError("Could not generate the certificate PDF. Please try again.");
+    } finally {
+      setDownloadingCertificateId("");
+    }
+  };
+
   const qrCertificateId = getCertificateIdentifier(qrCertificate);
   const qrVerifyLink = qrCertificateId ? getVerifyLink(qrCertificateId) : "";
 
@@ -387,6 +426,7 @@ export default function StudentDashboard({ user, role }) {
                       organizationNames[certificate.organizationId] ||
                       certificate.organizationId ||
                       "-";
+                    const isDownloading = downloadingCertificateId === certificateId;
 
                     return (
                       <tr key={certificate.id}>
@@ -467,6 +507,14 @@ export default function StudentDashboard({ user, role }) {
                               className="button button-outline button-small"
                             >
                               Show QR
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => downloadCertificate(certificate)}
+                              disabled={isDownloading}
+                              className="button button-outline button-small"
+                            >
+                              {isDownloading ? "Generating..." : "Download PDF"}
                             </button>
                           </div>
                         </td>
