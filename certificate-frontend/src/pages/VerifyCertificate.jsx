@@ -25,6 +25,10 @@ const BLOCKCHAIN_RESULT = {
   BATCH_ANCHORED: "BATCH ROOT ANCHORED",
 };
 
+const AMOY_TX_BASE_URL = "https://amoy.polygonscan.com/tx/";
+const AMOY_ADDRESS_BASE_URL = "https://amoy.polygonscan.com/address/";
+const NOT_AVAILABLE = "Not available";
+
 function formatValue(value) {
   if (value === undefined || value === null || value === "") {
     return "-";
@@ -35,6 +39,30 @@ function formatValue(value) {
   }
 
   return String(value);
+}
+
+function formatProofValue(value) {
+  if (value === undefined || value === null || value === "") {
+    return NOT_AVAILABLE;
+  }
+
+  if (typeof value?.toDate === "function") {
+    return value.toDate().toLocaleDateString();
+  }
+
+  return String(value);
+}
+
+function hasProofValue(value) {
+  return formatProofValue(value) !== NOT_AVAILABLE;
+}
+
+function getExplorerTxLink(txHash) {
+  return hasProofValue(txHash) ? `${AMOY_TX_BASE_URL}${txHash}` : "";
+}
+
+function getExplorerAddressLink(address) {
+  return hasProofValue(address) ? `${AMOY_ADDRESS_BASE_URL}${address}` : "";
 }
 
 function getFallbackOrganizationName(certificate) {
@@ -240,6 +268,8 @@ export default function VerifyCertificate() {
   const [certificateError, setCertificateError] = useState("");
   const [organizationWarning, setOrganizationWarning] = useState("");
   const [pdfLoading, setPdfLoading] = useState(false);
+  const [showTechnicalProof, setShowTechnicalProof] = useState(false);
+  const [copiedProofKey, setCopiedProofKey] = useState("");
   const toast = useToast();
   const [blockchainCheck, setBlockchainCheck] = useState({
     loading: false,
@@ -262,6 +292,8 @@ export default function VerifyCertificate() {
       setNotFound(false);
       setCertificateError("");
       setOrganizationWarning("");
+      setShowTechnicalProof(false);
+      setCopiedProofKey("");
       setCertificate(null);
       setOrganizationName("");
       setBlockchainCheck({
@@ -469,6 +501,27 @@ export default function VerifyCertificate() {
     }
   };
 
+  const copyProofValue = async (label, value, copiedKey) => {
+    if (!hasProofValue(value)) {
+      toast.warning(`${label} is not available.`);
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(String(value));
+      setCopiedProofKey(copiedKey);
+      toast.success(`${label} copied.`);
+      window.setTimeout(() => {
+        setCopiedProofKey((currentKey) =>
+          currentKey === copiedKey ? "" : currentKey,
+        );
+      }, 1800);
+    } catch (err) {
+      console.error(err);
+      toast.error(`Could not copy ${label.toLowerCase()}.`);
+    }
+  };
+
   const renderPublicShell = (children) => (
     <main className="public-shell">
       <div className="public-topbar">
@@ -616,6 +669,114 @@ export default function VerifyCertificate() {
       positiveValues: ["active"],
     },
   ];
+  const transactionHash = certificate?.blockchainTxHash;
+  const contractAddress = certificate?.contractAddress;
+  const issuerWalletAddress =
+    certificate?.blockchainIssuerAddress || blockchainCheck.onChain?.issuer;
+  const ipfsCid = certificate?.ipfsCid || blockchainCheck.onChain?.ipfsCid;
+  const revocationStatus = isRevoked ? "Revoked" : "Not revoked";
+  const proofRows = [
+    {
+      label: "Certificate Hash",
+      value: certificate?.certificateHash,
+      copyKey: "certificateHash",
+      copyLabel: "Certificate hash",
+      monospace: true,
+    },
+    {
+      label: "Computed Hash",
+      value: blockchainCheck.computedHash,
+      copyKey: "computedHash",
+      copyLabel: "Computed hash",
+      monospace: true,
+    },
+    ...(isBulk
+      ? [
+          {
+            label: "Batch Root",
+            value: certificate?.batchRoot,
+            copyKey: "batchRoot",
+            copyLabel: "Batch root",
+            monospace: true,
+          },
+          {
+            label: "On-chain Batch Root",
+            value: blockchainCheck.onChain?.batchRoot,
+            copyKey: "onChainBatchRoot",
+            copyLabel: "On-chain batch root",
+            monospace: true,
+          },
+          {
+            label: "Merkle Proof Status",
+            value: merkleProofText,
+          },
+        ]
+      : [
+          {
+            label: "On-chain Hash",
+            value: blockchainCheck.onChain?.certificateHash,
+            copyKey: "onChainHash",
+            copyLabel: "On-chain hash",
+            monospace: true,
+          },
+        ]),
+    {
+      label: isBulk ? "Batch Transaction Hash" : "Transaction Hash",
+      value: transactionHash,
+      copyKey: "transactionHash",
+      copyLabel: "Transaction hash",
+      href: getExplorerTxLink(transactionHash),
+      linkLabel: "View on Polygon",
+      monospace: true,
+    },
+    {
+      label: "Contract Address",
+      value: contractAddress,
+      copyKey: "contractAddress",
+      copyLabel: "Contract address",
+      href: getExplorerAddressLink(contractAddress),
+      linkLabel: "View contract",
+      monospace: true,
+    },
+    {
+      label: "Block Number",
+      value: certificate?.blockNumber,
+    },
+    {
+      label: "Issuer Wallet Address",
+      value: issuerWalletAddress,
+      monospace: true,
+    },
+    {
+      label: "IPFS CID",
+      value: ipfsCid,
+      copyKey: "ipfsCid",
+      copyLabel: "IPFS CID",
+      monospace: true,
+    },
+    {
+      label: "IPFS Gateway URL",
+      value: certificate?.ipfsGatewayUrl,
+      copyKey: "ipfsGatewayUrl",
+      copyLabel: "IPFS gateway URL",
+      href: hasProofValue(certificate?.ipfsGatewayUrl)
+        ? certificate.ipfsGatewayUrl
+        : "",
+      linkLabel: "Open IPFS",
+    },
+    {
+      label: "Blockchain Status",
+      value: certificate?.blockchainStatus || blockchainResult,
+    },
+    {
+      label: "Chain ID",
+      value: certificate?.blockchainChainId,
+    },
+    {
+      label: "Revocation Status",
+      value: revocationStatus,
+    },
+  ];
 
   const renderStatusBadges = () => (
     <div className="badge-row">
@@ -630,6 +791,47 @@ export default function VerifyCertificate() {
     </div>
   );
 
+  const renderProofValue = ({
+    copyKey,
+    copyLabel,
+    href,
+    label,
+    linkLabel,
+    monospace,
+    value,
+  }) => {
+    const displayValue = formatProofValue(value);
+    const valueClassName = monospace ? "hash-value" : "";
+
+    return (
+      <div className="technical-proof-value">
+        <span className={valueClassName}>{displayValue}</span>
+        <div className="technical-proof-actions">
+          {copyKey ? (
+            <button
+              type="button"
+              className="button button-outline proof-action-button"
+              onClick={() => copyProofValue(copyLabel || label, value, copyKey)}
+              disabled={!hasProofValue(value)}
+            >
+              {copiedProofKey === copyKey ? "Copied" : "Copy"}
+            </button>
+          ) : null}
+          {href ? (
+            <a
+              className="button button-tonal proof-action-button"
+              href={href}
+              target="_blank"
+              rel="noreferrer"
+            >
+              {linkLabel || "Open"}
+            </a>
+          ) : null}
+        </div>
+      </div>
+    );
+  };
+
   return renderPublicShell(
     <div className="grid">
       <section className={heroState.className}>
@@ -640,7 +842,7 @@ export default function VerifyCertificate() {
           Certificate ID: {certificate?.certificateId || certificate?.id}
         </p>
         {certificate?.certificateId || certificate?.id ? (
-          <div className="button-row" style={{ marginTop: 18 }}>
+          <div className="button-row verify-action-row" style={{ marginTop: 18 }}>
             {canDownloadCertificate ? (
               <button
                 type="button"
@@ -669,6 +871,18 @@ export default function VerifyCertificate() {
               className="button button-outline"
             >
               Share Certificate
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                setShowTechnicalProof((currentValue) => !currentValue)
+              }
+              className="button button-outline"
+              aria-expanded={showTechnicalProof}
+            >
+              {showTechnicalProof
+                ? "Hide Technical Proof"
+                : "Show Technical Proof"}
             </button>
           </div>
         ) : null}
@@ -708,6 +922,31 @@ export default function VerifyCertificate() {
           </div>
         </section>
       </div>
+
+      {showTechnicalProof ? (
+        <section className="card technical-proof-card">
+          <div className="section-header">
+            <div>
+              <h2>Technical Proof</h2>
+              <p className="muted">
+                Blockchain, hash, Merkle, and IPFS details for demo verification.
+              </p>
+            </div>
+            <span className={getBadgeClass(blockchainResult, ["confirmed"])}>
+              {blockchainResult}
+            </span>
+          </div>
+
+          <dl className="detail-list technical-proof-list">
+            {proofRows.map((proofRow) => (
+              <div className="detail-row" key={proofRow.label}>
+                <dt>{proofRow.label}</dt>
+                <dd>{renderProofValue(proofRow)}</dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+      ) : null}
     </div>,
   );
 }

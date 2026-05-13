@@ -64,6 +64,14 @@ const BULK_OPTIONAL_FIELDS = [
 
 const AMOY_TX_BASE_URL = "https://amoy.polygonscan.com/tx/";
 
+function getCertificateDesignLabel(value) {
+  return (
+    CERTIFICATE_DESIGNS.find((design) => design.value === value)?.label ||
+    value ||
+    "Classic Academic"
+  );
+}
+
 function parseCsvLine(line) {
   const cells = [];
   let current = "";
@@ -734,6 +742,7 @@ export default function OrgAdminDashboard({ user, view = "overview" }) {
   const [creatingTeacher, setCreatingTeacher] = useState(false);
   const [issuingCertificate, setIssuingCertificate] = useState(false);
   const [issuingBulkCertificates, setIssuingBulkCertificates] = useState(false);
+  const [issuanceConfirmation, setIssuanceConfirmation] = useState(null);
   const [revokingTeacherId, setRevokingTeacherId] = useState("");
   const [revokingCertificateId, setRevokingCertificateId] = useState("");
   const [downloadingCertificateId, setDownloadingCertificateId] = useState("");
@@ -1256,37 +1265,60 @@ export default function OrgAdminDashboard({ user, view = "overview" }) {
       return;
     }
 
+    const certificateDesign = certificateForm.certificateDesign;
+    const payload = {
+      studentName,
+      studentEmail,
+      courseName,
+      issueDate,
+      certificateTitle:
+        certificateForm.certificateTitle.trim() ||
+        emptyCertificateForm.certificateTitle,
+      certificateSubtitle:
+        certificateForm.certificateSubtitle.trim() ||
+        emptyCertificateForm.certificateSubtitle,
+      description: certificateForm.description.trim(),
+      gradeOrResult: certificateForm.gradeOrResult.trim(),
+      duration: certificateForm.duration.trim(),
+      venue: certificateForm.venue.trim(),
+      instructorName: certificateForm.instructorName.trim(),
+      remarks: certificateForm.remarks.trim(),
+      certificateDesign,
+      certificateTemplateDataUrl:
+        certificateDesign === "customUpload"
+          ? certificateForm.certificateTemplateDataUrl
+          : "",
+      aiDesignPrompt: certificateForm.aiDesignPrompt.trim(),
+      aiDesignSuggestion: certificateForm.aiDesignSuggestion,
+    };
+
+    setIssuanceConfirmation({
+      type: "single",
+      title: "Confirm Certificate Issuance",
+      message:
+        "You are about to issue this certificate and create a blockchain verification proof. Certificate details cannot be silently changed after anchoring.",
+      confirmLabel: "Confirm & Issue",
+      loadingLabel: "Submitting blockchain transaction...",
+      payload,
+      summary: [
+        ["Student name", studentName],
+        ["Student email", studentEmail],
+        ["Course name", courseName],
+        ["Issue date", issueDate],
+        ["Certificate design", getCertificateDesignLabel(certificateDesign)],
+      ],
+    });
+  };
+
+  const confirmSingleCertificateIssuance = async ({ payload }) => {
     try {
       setIssuingCertificate(true);
       await user.getIdToken(true);
 
-      const result = await issueCertificateFn({
-        studentName,
-        studentEmail,
-        courseName,
-        issueDate,
-        certificateTitle:
-          certificateForm.certificateTitle.trim() ||
-          emptyCertificateForm.certificateTitle,
-        certificateSubtitle:
-          certificateForm.certificateSubtitle.trim() ||
-          emptyCertificateForm.certificateSubtitle,
-        description: certificateForm.description.trim(),
-        gradeOrResult: certificateForm.gradeOrResult.trim(),
-        duration: certificateForm.duration.trim(),
-        venue: certificateForm.venue.trim(),
-        instructorName: certificateForm.instructorName.trim(),
-        remarks: certificateForm.remarks.trim(),
-        certificateDesign: certificateForm.certificateDesign,
-        certificateTemplateDataUrl:
-          certificateForm.certificateDesign === "customUpload"
-            ? certificateForm.certificateTemplateDataUrl
-            : "",
-        aiDesignPrompt: certificateForm.aiDesignPrompt.trim(),
-        aiDesignSuggestion: certificateForm.aiDesignSuggestion,
-      });
+      const result = await issueCertificateFn(payload);
 
       setCertificateForm(emptyCertificateForm);
+      setIssuanceConfirmation(null);
       toast.success(
         `Certificate issued successfully. ID: ${result.data.certificateId}`,
       );
@@ -1316,15 +1348,36 @@ export default function OrgAdminDashboard({ user, view = "overview" }) {
       return;
     }
 
+    setIssuanceConfirmation({
+      type: "bulk",
+      title: "Confirm Bulk Issuance",
+      message:
+        "You are about to issue certificates in bulk. A Merkle root will be anchored on-chain in one blockchain transaction.",
+      confirmLabel: "Confirm & Issue Batch",
+      loadingLabel: "Anchoring Merkle root on blockchain...",
+      payload: {
+        certificates: bulkRows,
+      },
+      summary: [
+        ["Number of certificates", bulkRows.length],
+        [
+          "Organization",
+          organizationName || organizationId || "Unknown Organization",
+        ],
+        ["Batch type", "Merkle batch"],
+        ["Estimated blockchain transactions", "1"],
+      ],
+    });
+  };
+
+  const confirmBulkCertificateIssuance = async ({ payload }) => {
     try {
       setIssuingBulkCertificates(true);
       await user.getIdToken(true);
 
-      const result = await issueBulkCertificatesFn({
-        certificates: bulkRows,
-      });
+      const result = await issueBulkCertificatesFn(payload);
       const batchId = result.data?.batchId || "";
-      const count = result.data?.count || bulkRows.length;
+      const count = result.data?.count || payload.certificates.length;
       const blockchainStatus = result.data?.blockchainStatus || "pending";
 
       setBulkCsvInput("");
@@ -1333,6 +1386,7 @@ export default function OrgAdminDashboard({ user, view = "overview" }) {
       setBulkRows([]);
       setBulkValidationErrors([]);
       setBulkPreviewReady(false);
+      setIssuanceConfirmation(null);
       toast.success(
         batchId
           ? `Bulk batch created successfully. Batch ID: ${batchId}. Count: ${count}. Blockchain: ${blockchainStatus}.`
@@ -1344,6 +1398,25 @@ export default function OrgAdminDashboard({ user, view = "overview" }) {
       toast.error(getReadableError(err));
     } finally {
       setIssuingBulkCertificates(false);
+    }
+  };
+
+  const closeIssuanceConfirmation = () => {
+    if (issuingCertificate || issuingBulkCertificates) return;
+
+    setIssuanceConfirmation(null);
+  };
+
+  const confirmIssuance = async () => {
+    if (!issuanceConfirmation) return;
+
+    if (issuanceConfirmation.type === "single") {
+      await confirmSingleCertificateIssuance(issuanceConfirmation);
+      return;
+    }
+
+    if (issuanceConfirmation.type === "bulk") {
+      await confirmBulkCertificateIssuance(issuanceConfirmation);
     }
   };
 
@@ -1437,6 +1510,9 @@ export default function OrgAdminDashboard({ user, view = "overview" }) {
   const showCertificateList = isTeacher && view === "certificates";
   const showCreateTeacher = isOrgAdmin && view === "createTeacher";
   const showTeacherList = isOrgAdmin && view === "teachers";
+  const issuanceConfirmationInProgress =
+    (issuanceConfirmation?.type === "single" && issuingCertificate) ||
+    (issuanceConfirmation?.type === "bulk" && issuingBulkCertificates);
 
   if (pageLoading) {
     return <div className="loading-screen">Loading dashboard...</div>;
@@ -1884,7 +1960,9 @@ export default function OrgAdminDashboard({ user, view = "overview" }) {
                   disabled={issuingCertificate}
                   className="button full-width"
                 >
-                  {issuingCertificate ? "Issuing..." : "Issue Certificate"}
+                  {issuingCertificate
+                    ? "Submitting blockchain transaction..."
+                    : "Issue Certificate"}
                 </button>
               </form>
             </section>
@@ -1980,7 +2058,9 @@ export default function OrgAdminDashboard({ user, view = "overview" }) {
                     }
                     className="button"
                   >
-                    {issuingBulkCertificates ? "Issuing..." : "Issue Bulk Batch"}
+                    {issuingBulkCertificates
+                      ? "Anchoring Merkle root on blockchain..."
+                      : "Issue Bulk Batch"}
                   </button>
                 </div>
               </div>
@@ -2262,6 +2342,62 @@ export default function OrgAdminDashboard({ user, view = "overview" }) {
           </>
         ) : null}
       </div>
+
+      {issuanceConfirmation ? (
+        <div className="modal-backdrop">
+          <section
+            className="modal issuance-confirmation-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="issuance-confirmation-title"
+          >
+            <div className="section-header">
+              <div>
+                <h2 id="issuance-confirmation-title">
+                  {issuanceConfirmation.title}
+                </h2>
+                <p className="muted">{issuanceConfirmation.message}</p>
+              </div>
+            </div>
+
+            <dl className="detail-list confirmation-summary">
+              {issuanceConfirmation.summary.map(([label, value]) => (
+                <div className="detail-row" key={label}>
+                  <dt>{label}</dt>
+                  <dd>{value || "-"}</dd>
+                </div>
+              ))}
+            </dl>
+
+            {issuanceConfirmationInProgress ? (
+              <div className="alert confirmation-progress">
+                {issuanceConfirmation.loadingLabel}
+              </div>
+            ) : null}
+
+            <div className="button-row confirmation-actions">
+              <button
+                type="button"
+                onClick={closeIssuanceConfirmation}
+                className="button button-tonal"
+                disabled={issuanceConfirmationInProgress}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmIssuance}
+                className="button"
+                disabled={issuanceConfirmationInProgress}
+              >
+                {issuanceConfirmationInProgress
+                  ? issuanceConfirmation.loadingLabel
+                  : issuanceConfirmation.confirmLabel}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {qrCertificate ? (
         <div className="modal-backdrop">
