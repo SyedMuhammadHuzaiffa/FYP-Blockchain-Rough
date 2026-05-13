@@ -5,7 +5,6 @@ import { collection, doc, getDoc, getDocs, query, where } from "firebase/firesto
 import { httpsCallable } from "firebase/functions";
 import { db, functions } from "../firebase";
 import AppLayout from "../components/AppLayout";
-import { generateCertificatePdf } from "../utils/certificatePdf";
 import { shareCertificate } from "../utils/shareCertificate";
 import { useToast } from "../components/toastContext";
 
@@ -20,10 +19,42 @@ const emptyCertificateForm = {
   studentEmail: "",
   courseName: "",
   issueDate: "",
+  certificateTitle: "Certificate of Achievement",
+  certificateSubtitle: "This is proudly presented to",
+  description: "",
+  gradeOrResult: "",
+  duration: "",
+  venue: "",
+  instructorName: "",
+  remarks: "",
+  certificateDesign: "classicAcademic",
+  certificateTemplateDataUrl: "",
+  aiDesignPrompt: "",
+  aiDesignSuggestion: null,
 };
 
 const MAX_BULK_CERTIFICATES = 200;
-const BULK_CSV_HEADER = "studentName,studentEmail,courseName,issueDate";
+const MAX_TEMPLATE_DATA_URL_LENGTH = 900000;
+const BULK_CSV_HEADER =
+  "studentName,studentEmail,courseName,issueDate,certificateTitle,description,gradeOrResult,duration,venue,instructorName,remarks";
+const CERTIFICATE_DESIGNS = [
+  { value: "classicAcademic", label: "Classic Academic" },
+  { value: "modernMinimal", label: "Modern Minimal" },
+  { value: "premiumGold", label: "Premium Gold" },
+  { value: "cleanBlue", label: "Clean Blue" },
+  { value: "customUpload", label: "Custom Upload" },
+  { value: "aiSuggested", label: "AI Suggested" },
+];
+const BULK_OPTIONAL_FIELDS = [
+  "certificateTitle",
+  "certificateSubtitle",
+  "description",
+  "gradeOrResult",
+  "duration",
+  "venue",
+  "instructorName",
+  "remarks",
+];
 
 const AMOY_TX_BASE_URL = "https://amoy.polygonscan.com/tx/";
 
@@ -81,6 +112,52 @@ function hasBulkHeader(cells) {
   );
 }
 
+function getBulkRowFromCells(cells, headerMap = null) {
+  if (headerMap) {
+    const getByHeader = (field) => cells[headerMap[field]] || "";
+
+    return {
+      studentName: getByHeader("studentname").trim(),
+      studentEmail: getByHeader("studentemail").trim().toLowerCase(),
+      courseName: getByHeader("coursename").trim(),
+      issueDate: getByHeader("issuedate").trim(),
+      certificateTitle: getByHeader("certificatetitle").trim(),
+      certificateSubtitle: getByHeader("certificatesubtitle").trim(),
+      description: getByHeader("description").trim(),
+      gradeOrResult: getByHeader("gradeorresult").trim(),
+      duration: getByHeader("duration").trim(),
+      venue: getByHeader("venue").trim(),
+      instructorName: getByHeader("instructorname").trim(),
+      remarks: getByHeader("remarks").trim(),
+    };
+  }
+
+  const [
+    studentName = "",
+    studentEmail = "",
+    courseName = "",
+    issueDate = "",
+    ...optionalCells
+  ] = cells;
+
+  const row = {
+    studentName: studentName.trim(),
+    studentEmail: studentEmail.trim().toLowerCase(),
+    courseName: courseName.trim(),
+    issueDate: issueDate.trim(),
+  };
+
+  BULK_OPTIONAL_FIELDS.forEach((field, index) => {
+    const value = optionalCells[index]?.trim();
+
+    if (value) {
+      row[field] = value;
+    }
+  });
+
+  return row;
+}
+
 function parseBulkCertificateInput(input) {
   const lines = input
     .split(/\r?\n/)
@@ -96,7 +173,14 @@ function parseBulkCertificateInput(input) {
   }
 
   const firstCells = parseCsvLine(lines[0]);
-  const dataLines = hasBulkHeader(firstCells) ? lines.slice(1) : lines;
+  const includesHeader = hasBulkHeader(firstCells);
+  const headerMap = includesHeader
+    ? firstCells.reduce((current, cell, index) => {
+        current[normalizeHeader(cell)] = index;
+        return current;
+      }, {})
+    : null;
+  const dataLines = includesHeader ? lines.slice(1) : lines;
 
   if (dataLines.length === 0) {
     return {
@@ -114,18 +198,11 @@ function parseBulkCertificateInput(input) {
   const rows = dataLines.map((line, index) => {
     const rowNumber = index + 1;
     const cells = parseCsvLine(line);
-    const [studentName = "", studentEmail = "", courseName = "", issueDate = ""] =
-      cells;
-    const row = {
-      studentName: studentName.trim(),
-      studentEmail: studentEmail.trim().toLowerCase(),
-      courseName: courseName.trim(),
-      issueDate: issueDate.trim(),
-    };
+    const row = getBulkRowFromCells(cells, headerMap);
 
-    if (cells.length !== 4) {
+    if (!headerMap && cells.length < 4) {
       validationErrors.push(
-        `Row ${rowNumber}: expected 4 comma-separated fields.`,
+        `Row ${rowNumber}: expected at least 4 comma-separated fields.`,
       );
     }
 
@@ -215,6 +292,103 @@ function getStatusBadge(status = "unknown") {
   return "badge";
 }
 
+function getCertificateTrustStatus(certificate = {}) {
+  if (certificate.status === "revoked") return "Revoked";
+  if (certificate.issuanceMode === "bulk" && certificate.blockchainStatus === "confirmed") {
+    return "Confirmed";
+  }
+  if (certificate.blockchainStatus === "confirmed") return "Confirmed";
+  if (certificate.blockchainStatus === "failed") return "Failed";
+  return "Pending";
+}
+
+function getCertificateFilterValue(certificate = {}) {
+  if (certificate.status === "revoked") return "revoked";
+  if (certificate.issuanceMode === "bulk") return "bulk";
+  if (certificate.blockchainStatus === "confirmed") return "confirmed";
+  if (certificate.issuanceMode === "single" || !certificate.issuanceMode) return "single";
+  return "pending";
+}
+
+function certificateMatchesFilter(certificate, filterValue) {
+  if (filterValue === "all") return true;
+  if (filterValue === "confirmed") return certificate.blockchainStatus === "confirmed";
+  if (filterValue === "pending") {
+    return !certificate.blockchainStatus || certificate.blockchainStatus === "pending";
+  }
+  if (filterValue === "revoked") return certificate.status === "revoked";
+  if (filterValue === "bulk") return certificate.issuanceMode === "bulk";
+  if (filterValue === "single") return certificate.issuanceMode !== "bulk";
+  return getCertificateFilterValue(certificate) === filterValue;
+}
+
+function createAiDesignSuggestion(prompt) {
+  const normalizedPrompt = prompt.toLowerCase();
+  const wantsGold =
+    normalizedPrompt.includes("gold") ||
+    normalizedPrompt.includes("premium") ||
+    normalizedPrompt.includes("elegant") ||
+    normalizedPrompt.includes("formal");
+  const wantsBlue =
+    normalizedPrompt.includes("blue") ||
+    normalizedPrompt.includes("corporate") ||
+    normalizedPrompt.includes("tech");
+  const wantsMinimal =
+    normalizedPrompt.includes("minimal") ||
+    normalizedPrompt.includes("simple") ||
+    normalizedPrompt.includes("clean");
+
+  if (wantsGold) {
+    return {
+      themeName: "Premium Gold",
+      palette: "ivory, charcoal, warm gold",
+      borderStyle: normalizedPrompt.includes("ornate") ? "ornate" : "double line",
+      typographyStyle: "classic serif",
+      layoutStyle: "formal academic",
+      design: "premiumGold",
+      accent: "gold",
+      tone: "academic",
+    };
+  }
+
+  if (wantsBlue) {
+    return {
+      themeName: "Clean Blue",
+      palette: "white, navy, bright blue",
+      borderStyle: "structured blue frame",
+      typographyStyle: "modern sans with serif name",
+      layoutStyle: "balanced institutional",
+      design: "cleanBlue",
+      accent: "blue",
+      tone: "professional",
+    };
+  }
+
+  if (wantsMinimal) {
+    return {
+      themeName: "Modern Minimal",
+      palette: "white, graphite, soft teal",
+      borderStyle: "thin minimal rule",
+      typographyStyle: "clean sans",
+      layoutStyle: "spacious modern",
+      design: "modernMinimal",
+      accent: "teal",
+      tone: "contemporary",
+    };
+  }
+
+  return {
+    themeName: "Classic Academic",
+    palette: "white, navy, muted gold",
+    borderStyle: "double academic border",
+    typographyStyle: "traditional serif",
+    layoutStyle: "centered ceremonial",
+    design: "classicAcademic",
+    accent: "navy",
+    tone: "academic",
+  };
+}
+
 function CertificateTable({
   certificates,
   loading,
@@ -229,6 +403,41 @@ function CertificateTable({
   onRevoke,
   onShare,
 }) {
+  const [searchTerm, setSearchTerm] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const normalizedSearchTerm = searchTerm.trim().toLowerCase();
+  const filteredCertificates = useMemo(() => {
+    return certificates.filter((certificate) => {
+      const certificateId = getCertificateIdentifier(certificate);
+      const statusText = [
+        certificate.status,
+        certificate.blockchainStatus,
+        certificate.emailStatus,
+        certificate.ipfsStatus,
+        getCertificateTrustStatus(certificate),
+        certificate.issuanceMode,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      const searchTarget = [
+        certificateId,
+        certificate.studentName,
+        certificate.studentEmail,
+        certificate.courseName,
+        statusText,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+
+      return (
+        (!normalizedSearchTerm || searchTarget.includes(normalizedSearchTerm)) &&
+        certificateMatchesFilter(certificate, statusFilter)
+      );
+    });
+  }, [certificates, normalizedSearchTerm, statusFilter]);
+
   return (
     <section className="card">
       <div className="section-header">
@@ -246,6 +455,33 @@ function CertificateTable({
         </button>
       </div>
 
+      <div className="list-toolbar">
+        <label className="field">
+          <span>Search Certificates</span>
+          <input
+            className="input"
+            placeholder="ID, student, email, course, or status"
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+          />
+        </label>
+        <label className="field">
+          <span>Filter</span>
+          <select
+            className="input"
+            value={statusFilter}
+            onChange={(event) => setStatusFilter(event.target.value)}
+          >
+            <option value="all">All</option>
+            <option value="confirmed">Confirmed</option>
+            <option value="pending">Pending</option>
+            <option value="revoked">Revoked</option>
+            <option value="bulk">Bulk</option>
+            <option value="single">Single</option>
+          </select>
+        </label>
+      </div>
+
       {loading ? <div className="alert">Loading certificates...</div> : null}
 
       {!loading && certificates.length === 0 ? (
@@ -255,8 +491,15 @@ function CertificateTable({
         </div>
       ) : null}
 
-      {!loading && certificates.length > 0 ? (
-        <div className="table-container">
+      {!loading && certificates.length > 0 && filteredCertificates.length === 0 ? (
+        <div className="empty-state">
+          <strong>No matching certificates</strong>
+          <span>Try another search term or filter.</span>
+        </div>
+      ) : null}
+
+      {!loading && filteredCertificates.length > 0 ? (
+        <div className="table-container table-container-scroll">
           <table className="table">
             <thead>
               <tr>
@@ -272,7 +515,7 @@ function CertificateTable({
               </tr>
             </thead>
             <tbody>
-              {certificates.map((certificate) => {
+              {filteredCertificates.map((certificate) => {
                 const certificateId = getCertificateIdentifier(certificate);
                 const isCopied = copiedCertificateId === certificateId;
                 const isRevoked = certificate.status === "revoked";
@@ -453,7 +696,7 @@ function CertificateTable({
   );
 }
 
-export default function OrgAdminDashboard({ user }) {
+export default function OrgAdminDashboard({ user, view = "overview" }) {
   const [profile, setProfile] = useState(null);
   const [organizationName, setOrganizationName] = useState("");
   const [teachers, setTeachers] = useState([]);
@@ -475,6 +718,8 @@ export default function OrgAdminDashboard({ user }) {
   const [downloadingCertificateId, setDownloadingCertificateId] = useState("");
   const [copiedCertificateId, setCopiedCertificateId] = useState("");
   const [qrCertificate, setQrCertificate] = useState(null);
+  const [teacherSearchTerm, setTeacherSearchTerm] = useState("");
+  const [teacherStatusFilter, setTeacherStatusFilter] = useState("all");
   const [error, setError] = useState("");
   const toast = useToast();
 
@@ -633,6 +878,66 @@ export default function OrgAdminDashboard({ user }) {
     }));
   };
 
+  const handleCertificateTemplateUpload = (file) => {
+    if (!file) {
+      updateCertificateForm("certificateTemplateDataUrl", "");
+      return;
+    }
+
+    if (!file.type.startsWith("image/")) {
+      toast.warning("Upload a PNG or JPG certificate template image.");
+      return;
+    }
+
+    if (!["image/png", "image/jpeg"].includes(file.type)) {
+      toast.warning("PDF templates support PNG and JPG images.");
+      return;
+    }
+
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      const dataUrl = String(reader.result || "");
+
+      if (dataUrl.length > MAX_TEMPLATE_DATA_URL_LENGTH) {
+        toast.warning("Template image is too large. Use an image under about 650 KB.");
+        updateCertificateForm("certificateTemplateDataUrl", "");
+        return;
+      }
+
+      setCertificateForm((current) => ({
+        ...current,
+        certificateDesign: "customUpload",
+        certificateTemplateDataUrl: dataUrl,
+      }));
+      toast.success("Template image added for this certificate.");
+    };
+
+    reader.onerror = () => {
+      toast.error("Could not read the template image. Please try another file.");
+    };
+
+    reader.readAsDataURL(file);
+  };
+
+  const generateDesignSuggestion = () => {
+    const prompt = certificateForm.aiDesignPrompt.trim();
+
+    if (!prompt) {
+      toast.warning("Enter an AI design prompt first.");
+      return;
+    }
+
+    const suggestion = createAiDesignSuggestion(prompt);
+
+    setCertificateForm((current) => ({
+      ...current,
+      certificateDesign: "aiSuggested",
+      aiDesignSuggestion: suggestion,
+    }));
+    toast.success(`Design suggestion ready: ${suggestion.themeName}.`);
+  };
+
   const updateBulkCsvInput = (value) => {
     setBulkCsvInput(value);
     setBulkRows([]);
@@ -667,6 +972,8 @@ export default function OrgAdminDashboard({ user }) {
     setError("");
 
     try {
+      const { generateCertificatePdf } = await import("../utils/certificatePdf");
+
       await generateCertificatePdf(
         {
           ...certificate,
@@ -816,6 +1123,25 @@ export default function OrgAdminDashboard({ user }) {
         studentEmail,
         courseName,
         issueDate,
+        certificateTitle:
+          certificateForm.certificateTitle.trim() ||
+          emptyCertificateForm.certificateTitle,
+        certificateSubtitle:
+          certificateForm.certificateSubtitle.trim() ||
+          emptyCertificateForm.certificateSubtitle,
+        description: certificateForm.description.trim(),
+        gradeOrResult: certificateForm.gradeOrResult.trim(),
+        duration: certificateForm.duration.trim(),
+        venue: certificateForm.venue.trim(),
+        instructorName: certificateForm.instructorName.trim(),
+        remarks: certificateForm.remarks.trim(),
+        certificateDesign: certificateForm.certificateDesign,
+        certificateTemplateDataUrl:
+          certificateForm.certificateDesign === "customUpload"
+            ? certificateForm.certificateTemplateDataUrl
+            : "",
+        aiDesignPrompt: certificateForm.aiDesignPrompt.trim(),
+        aiDesignSuggestion: certificateForm.aiDesignSuggestion,
       });
 
       setCertificateForm(emptyCertificateForm);
@@ -937,6 +1263,49 @@ export default function OrgAdminDashboard({ user }) {
 
   const qrCertificateId = getCertificateIdentifier(qrCertificate);
   const qrVerifyLink = qrCertificateId ? getVerifyLink(qrCertificateId) : "";
+  const normalizedTeacherSearch = teacherSearchTerm.trim().toLowerCase();
+  const filteredTeachers = useMemo(() => {
+    return teachers.filter((teacher) => {
+      const status = String(teacher.status || "unknown").toLowerCase();
+      const searchTarget = [
+        teacher.name,
+        teacher.email,
+        teacher.status,
+        teacher.uid,
+        teacher.id,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+
+      return (
+        (!normalizedTeacherSearch ||
+          searchTarget.includes(normalizedTeacherSearch)) &&
+        (teacherStatusFilter === "all" || status === teacherStatusFilter)
+      );
+    });
+  }, [normalizedTeacherSearch, teacherStatusFilter, teachers]);
+  const recentCertificates = certificates.slice(0, 5);
+  const activeTeacherCount = teachers.filter(
+    (teacher) => String(teacher.status || "active").toLowerCase() === "active",
+  ).length;
+  const confirmedCertificateCount = certificates.filter(
+    (certificate) => certificate.blockchainStatus === "confirmed",
+  ).length;
+  const pendingCertificateCount = certificates.filter(
+    (certificate) =>
+      !certificate.blockchainStatus ||
+      certificate.blockchainStatus === "pending",
+  ).length;
+  const revokedCertificateCount = certificates.filter(
+    (certificate) => certificate.status === "revoked",
+  ).length;
+  const showOverview = view === "overview";
+  const showIssueForm = isTeacher && view === "issue";
+  const showBulkIssueForm = isTeacher && view === "bulkIssue";
+  const showCertificateList = isTeacher && view === "certificates";
+  const showCreateTeacher = isOrgAdmin && view === "createTeacher";
+  const showTeacherList = isOrgAdmin && view === "teachers";
 
   if (pageLoading) {
     return <div className="loading-screen">Loading dashboard...</div>;
@@ -958,15 +1327,36 @@ export default function OrgAdminDashboard({ user }) {
     );
   }
 
-  const navItems = [
-    { to: "/dashboard", label: isTeacher ? "Teacher" : "Org Admin", icon: "D" },
-  ];
+  const navItems = isTeacher
+    ? [
+        { to: "/dashboard", label: "Overview", icon: "O" },
+        { to: "/dashboard/issue", label: "Issue", icon: "I" },
+        { to: "/dashboard/bulk-issue", label: "Bulk Issue", icon: "B" },
+        { to: "/dashboard/certificates", label: "Certificates", icon: "C" },
+      ]
+    : [
+        { to: "/org-admin", label: "Overview", icon: "O" },
+        { to: "/org-admin/teachers", label: "Teachers", icon: "T" },
+        { to: "/org-admin/create-teacher", label: "Create Teacher", icon: "C" },
+      ];
+  const pageTitle = isTeacher
+    ? {
+        overview: "Teacher Overview",
+        issue: "Issue Certificate",
+        bulkIssue: "Bulk Issue Certificates",
+        certificates: "Issued Certificates",
+      }[view] || "Teacher Dashboard"
+    : {
+        overview: "Org Admin Overview",
+        teachers: "Teacher Directory",
+        createTeacher: "Create Teacher",
+      }[view] || "Org Admin Dashboard";
 
   return (
     <AppLayout
       user={user}
       role={profile?.role}
-      title={isTeacher ? "Teacher Dashboard" : "Org Admin Dashboard"}
+      title={pageTitle}
       subtitle={`${organizationName || "Unknown Organization"} · ${
         profile?.email || user?.email
       }`}
@@ -1001,6 +1391,114 @@ export default function OrgAdminDashboard({ user }) {
 
         {isTeacher ? (
           <>
+            {showOverview ? (
+              <>
+                <section className="quick-actions">
+                  <Link to="/dashboard/issue" className="action-card">
+                    <span className="badge badge-primary">Single</span>
+                    <strong>Issue Single Certificate</strong>
+                    <span>Create one polished certificate with display metadata.</span>
+                  </Link>
+                  <Link to="/dashboard/bulk-issue" className="action-card">
+                    <span className="badge badge-primary">Batch</span>
+                    <strong>Bulk Issue Certificates</strong>
+                    <span>Paste CSV rows and create a Merkle-backed batch.</span>
+                  </Link>
+                  <Link to="/dashboard/certificates" className="action-card">
+                    <span className="badge badge-primary">Records</span>
+                    <strong>View Issued Certificates</strong>
+                    <span>Search, share, download, revoke, and verify certificates.</span>
+                  </Link>
+                </section>
+
+                <div className="grid grid-three">
+                  <section className="card stat-card">
+                    <span className="muted">Confirmed</span>
+                    <strong className="stat-value">{confirmedCertificateCount}</strong>
+                  </section>
+                  <section className="card stat-card">
+                    <span className="muted">Pending</span>
+                    <strong className="stat-value">{pendingCertificateCount}</strong>
+                  </section>
+                  <section className="card stat-card">
+                    <span className="muted">Revoked</span>
+                    <strong className="stat-value">{revokedCertificateCount}</strong>
+                  </section>
+                </div>
+
+                <section className="card">
+                  <div className="section-header">
+                    <div>
+                      <h2>Recent Activity</h2>
+                      <p className="muted">Latest certificates issued from this account.</p>
+                    </div>
+                    <Link to="/dashboard/certificates" className="button button-outline">
+                      View All
+                    </Link>
+                  </div>
+
+                  {certificatesLoading ? (
+                    <div className="alert">Loading recent certificates...</div>
+                  ) : null}
+
+                  {!certificatesLoading && recentCertificates.length === 0 ? (
+                    <div className="empty-state">
+                      <strong>No recent certificates</strong>
+                      <span>Issue a certificate to populate your demo activity.</span>
+                    </div>
+                  ) : null}
+
+                  {!certificatesLoading && recentCertificates.length > 0 ? (
+                    <div className="table-container table-container-compact">
+                      <table className="table">
+                        <thead>
+                          <tr>
+                            <th>Student</th>
+                            <th>Course</th>
+                            <th>Status</th>
+                            <th>Open</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {recentCertificates.map((certificate) => {
+                            const certificateId = getCertificateIdentifier(certificate);
+
+                            return (
+                              <tr key={certificate.id}>
+                                <td>
+                                  <strong>{certificate.studentName || "-"}</strong>
+                                  <p className="muted">{certificate.studentEmail || "-"}</p>
+                                </td>
+                                <td>{certificate.courseName || "-"}</td>
+                                <td>
+                                  <span
+                                    className={getStatusBadge(
+                                      certificate.blockchainStatus || "pending",
+                                    )}
+                                  >
+                                    {getCertificateTrustStatus(certificate)}
+                                  </span>
+                                </td>
+                                <td>
+                                  <Link
+                                    to={`/verify/${certificateId}`}
+                                    className="button button-tonal button-small"
+                                  >
+                                    Verify
+                                  </Link>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : null}
+                </section>
+              </>
+            ) : null}
+
+            {showIssueForm ? (
             <section className="card">
               <div className="section-header">
                 <div>
@@ -1065,6 +1563,191 @@ export default function OrgAdminDashboard({ user }) {
                   />
                 </label>
 
+                <label className="field">
+                  <span>Certificate Title</span>
+                  <input
+                    className="input"
+                    placeholder="Certificate of Achievement"
+                    value={certificateForm.certificateTitle}
+                    onChange={(event) =>
+                      updateCertificateForm("certificateTitle", event.target.value)
+                    }
+                    disabled={issuingCertificate}
+                  />
+                </label>
+
+                <label className="field">
+                  <span>Certificate Subtitle</span>
+                  <input
+                    className="input"
+                    placeholder="This is proudly presented to"
+                    value={certificateForm.certificateSubtitle}
+                    onChange={(event) =>
+                      updateCertificateForm("certificateSubtitle", event.target.value)
+                    }
+                    disabled={issuingCertificate}
+                  />
+                </label>
+
+                <label className="field full-width">
+                  <span>Description</span>
+                  <textarea
+                    className="input textarea"
+                    rows={3}
+                    placeholder="For successfully completing the blockchain workshop"
+                    value={certificateForm.description}
+                    onChange={(event) =>
+                      updateCertificateForm("description", event.target.value)
+                    }
+                    disabled={issuingCertificate}
+                  />
+                </label>
+
+                <label className="field">
+                  <span>Grade or Result</span>
+                  <input
+                    className="input"
+                    placeholder="Distinction, Pass, A+, etc."
+                    value={certificateForm.gradeOrResult}
+                    onChange={(event) =>
+                      updateCertificateForm("gradeOrResult", event.target.value)
+                    }
+                    disabled={issuingCertificate}
+                  />
+                </label>
+
+                <label className="field">
+                  <span>Duration</span>
+                  <input
+                    className="input"
+                    placeholder="6 weeks, 24 hours, May 2026"
+                    value={certificateForm.duration}
+                    onChange={(event) =>
+                      updateCertificateForm("duration", event.target.value)
+                    }
+                    disabled={issuingCertificate}
+                  />
+                </label>
+
+                <label className="field">
+                  <span>Venue</span>
+                  <input
+                    className="input"
+                    placeholder="Main Auditorium"
+                    value={certificateForm.venue}
+                    onChange={(event) =>
+                      updateCertificateForm("venue", event.target.value)
+                    }
+                    disabled={issuingCertificate}
+                  />
+                </label>
+
+                <label className="field">
+                  <span>Instructor Name</span>
+                  <input
+                    className="input"
+                    placeholder="Instructor or coordinator"
+                    value={certificateForm.instructorName}
+                    onChange={(event) =>
+                      updateCertificateForm("instructorName", event.target.value)
+                    }
+                    disabled={issuingCertificate}
+                  />
+                </label>
+
+                <label className="field full-width">
+                  <span>Remarks</span>
+                  <textarea
+                    className="input textarea"
+                    rows={2}
+                    placeholder="Optional remarks for the printed certificate"
+                    value={certificateForm.remarks}
+                    onChange={(event) =>
+                      updateCertificateForm("remarks", event.target.value)
+                    }
+                    disabled={issuingCertificate}
+                  />
+                </label>
+
+                <label className="field">
+                  <span>Certificate Design</span>
+                  <select
+                    className="input"
+                    value={certificateForm.certificateDesign}
+                    onChange={(event) =>
+                      updateCertificateForm("certificateDesign", event.target.value)
+                    }
+                    disabled={issuingCertificate}
+                  >
+                    {CERTIFICATE_DESIGNS.map((design) => (
+                      <option key={design.value} value={design.value}>
+                        {design.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="field">
+                  <span>Custom Template Image</span>
+                  <input
+                    className="input"
+                    type="file"
+                    accept="image/png,image/jpeg"
+                    onChange={(event) =>
+                      handleCertificateTemplateUpload(event.target.files?.[0])
+                    }
+                    disabled={issuingCertificate}
+                  />
+                </label>
+
+                {certificateForm.certificateTemplateDataUrl ? (
+                  <div className="template-preview full-width">
+                    <span className="badge badge-primary">Custom template ready</span>
+                    <button
+                      type="button"
+                      className="button button-outline button-small"
+                      onClick={() =>
+                        setCertificateForm((current) => ({
+                          ...current,
+                          certificateTemplateDataUrl: "",
+                        }))
+                      }
+                    >
+                      Remove Template
+                    </button>
+                  </div>
+                ) : null}
+
+                <label className="field full-width">
+                  <span>AI Design Prompt</span>
+                  <textarea
+                    className="input textarea"
+                    rows={2}
+                    placeholder="formal university gold certificate with elegant border"
+                    value={certificateForm.aiDesignPrompt}
+                    onChange={(event) =>
+                      updateCertificateForm("aiDesignPrompt", event.target.value)
+                    }
+                    disabled={issuingCertificate}
+                  />
+                </label>
+
+                <div className="full-width button-row">
+                  <button
+                    type="button"
+                    className="button button-outline"
+                    onClick={generateDesignSuggestion}
+                    disabled={issuingCertificate}
+                  >
+                    Generate Design Suggestion
+                  </button>
+                  {certificateForm.aiDesignSuggestion ? (
+                    <span className="badge badge-primary">
+                      {certificateForm.aiDesignSuggestion.themeName}
+                    </span>
+                  ) : null}
+                </div>
+
                 <button
                   type="submit"
                   disabled={issuingCertificate}
@@ -1074,7 +1757,9 @@ export default function OrgAdminDashboard({ user }) {
                 </button>
               </form>
             </section>
+            ) : null}
 
+            {showBulkIssueForm ? (
             <section className="card">
               <div className="section-header">
                 <div>
@@ -1150,6 +1835,7 @@ export default function OrgAdminDashboard({ user }) {
                         <th>Email</th>
                         <th>Course</th>
                         <th>Issue Date</th>
+                        <th>Details</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1162,6 +1848,17 @@ export default function OrgAdminDashboard({ user }) {
                           <td>{row.studentEmail || "-"}</td>
                           <td>{row.courseName || "-"}</td>
                           <td>{row.issueDate || "-"}</td>
+                          <td>
+                            {row.certificateTitle ||
+                            row.description ||
+                            row.gradeOrResult ||
+                            row.duration ||
+                            row.venue ||
+                            row.instructorName ||
+                            row.remarks
+                              ? "Custom"
+                              : "Default"}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -1169,7 +1866,9 @@ export default function OrgAdminDashboard({ user }) {
                 </div>
               ) : null}
             </section>
+            ) : null}
 
+            {showCertificateList ? (
             <CertificateTable
               certificates={certificates}
               loading={certificatesLoading}
@@ -1184,11 +1883,47 @@ export default function OrgAdminDashboard({ user }) {
               onRevoke={revokeCertificate}
               onShare={handleShareCertificate}
             />
+            ) : null}
           </>
         ) : null}
 
         {isOrgAdmin ? (
           <>
+            {showOverview ? (
+              <>
+                <section className="quick-actions">
+                  <Link to="/org-admin/create-teacher" className="action-card">
+                    <span className="badge badge-primary">Invite</span>
+                    <strong>Create Teacher</strong>
+                    <span>Add a teacher account for certificate issuance.</span>
+                  </Link>
+                  <Link to="/org-admin/teachers" className="action-card">
+                    <span className="badge badge-primary">Directory</span>
+                    <strong>View Teachers</strong>
+                    <span>Search teacher access and revoke when needed.</span>
+                  </Link>
+                </section>
+
+                <div className="grid grid-three">
+                  <section className="card stat-card">
+                    <span className="muted">Active Teachers</span>
+                    <strong className="stat-value">{activeTeacherCount}</strong>
+                  </section>
+                  <section className="card stat-card">
+                    <span className="muted">Inactive Teachers</span>
+                    <strong className="stat-value">
+                      {Math.max(teachers.length - activeTeacherCount, 0)}
+                    </strong>
+                  </section>
+                  <section className="card stat-card">
+                    <span className="muted">Organization</span>
+                    <strong className="hash-value">{organizationName || organizationId}</strong>
+                  </section>
+                </div>
+              </>
+            ) : null}
+
+            {showCreateTeacher ? (
             <section className="card">
               <div className="section-header">
                 <div>
@@ -1250,7 +1985,9 @@ export default function OrgAdminDashboard({ user }) {
                 </button>
               </form>
             </section>
+            ) : null}
 
+            {showTeacherList ? (
             <section className="card">
               <div className="section-header">
                 <div>
@@ -1269,6 +2006,31 @@ export default function OrgAdminDashboard({ user }) {
 
               {teachersLoading ? <div className="alert">Loading teachers...</div> : null}
 
+              <div className="list-toolbar">
+                <label className="field">
+                  <span>Search Teachers</span>
+                  <input
+                    className="input"
+                    placeholder="Name, email, or status"
+                    value={teacherSearchTerm}
+                    onChange={(event) => setTeacherSearchTerm(event.target.value)}
+                  />
+                </label>
+                <label className="field">
+                  <span>Filter</span>
+                  <select
+                    className="input"
+                    value={teacherStatusFilter}
+                    onChange={(event) => setTeacherStatusFilter(event.target.value)}
+                  >
+                    <option value="all">All</option>
+                    <option value="active">Active</option>
+                    <option value="disabled">Disabled</option>
+                    <option value="revoked">Revoked</option>
+                  </select>
+                </label>
+              </div>
+
               {!teachersLoading && teachers.length === 0 ? (
                 <div className="empty-state">
                   <strong>No active teachers found</strong>
@@ -1276,8 +2038,15 @@ export default function OrgAdminDashboard({ user }) {
                 </div>
               ) : null}
 
-              {!teachersLoading && teachers.length > 0 ? (
-                <div className="table-container">
+              {!teachersLoading && teachers.length > 0 && filteredTeachers.length === 0 ? (
+                <div className="empty-state">
+                  <strong>No matching teachers</strong>
+                  <span>Try another search term or filter.</span>
+                </div>
+              ) : null}
+
+              {!teachersLoading && filteredTeachers.length > 0 ? (
+                <div className="table-container table-container-scroll table-container-compact">
                   <table className="table">
                     <thead>
                       <tr>
@@ -1288,7 +2057,7 @@ export default function OrgAdminDashboard({ user }) {
                       </tr>
                     </thead>
                     <tbody>
-                      {teachers.map((teacher) => (
+                      {filteredTeachers.map((teacher) => (
                         <tr key={teacher.id}>
                           <td>{teacher.name || "-"}</td>
                           <td>{teacher.email || "-"}</td>
@@ -1316,6 +2085,7 @@ export default function OrgAdminDashboard({ user }) {
                 </div>
               ) : null}
             </section>
+            ) : null}
           </>
         ) : null}
       </div>

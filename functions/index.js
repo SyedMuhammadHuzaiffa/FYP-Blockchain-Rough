@@ -34,6 +34,21 @@ const CERTIFICATE_REGISTRY_ADDRESS = defineSecret(
 const BLOCKCHAIN_CHAIN_ID = defineSecret("BLOCKCHAIN_CHAIN_ID");
 const PINATA_JWT = defineSecret("PINATA_JWT");
 const MAX_BULK_CERTIFICATES = 200;
+const MAX_CERTIFICATE_TEMPLATE_DATA_URL_LENGTH = 900000;
+const CERTIFICATE_DISPLAY_FIELDS = [
+  "certificateTitle",
+  "certificateSubtitle",
+  "description",
+  "gradeOrResult",
+  "duration",
+  "venue",
+  "instructorName",
+  "remarks",
+  "certificateDesign",
+  "aiDesignPrompt",
+];
+const DEFAULT_CERTIFICATE_TITLE = "Certificate of Achievement";
+const DEFAULT_CERTIFICATE_SUBTITLE = "This is proudly presented to";
 
 // =============================
 // HELPERS
@@ -198,6 +213,87 @@ function normalizeEmail(email) {
 
 function cleanName(name) {
   return typeof name === "string" ? name.trim() : "";
+}
+
+function cleanString(value, maxLength = 500) {
+  const cleaned = typeof value === "string" ? value.trim() : "";
+
+  return cleaned.length > maxLength ? cleaned.slice(0, maxLength) : cleaned;
+}
+
+function cleanAiDesignSuggestion(suggestion) {
+  if (!suggestion || typeof suggestion !== "object" || Array.isArray(suggestion)) {
+    return null;
+  }
+
+  const allowedFields = [
+    "themeName",
+    "palette",
+    "borderStyle",
+    "typographyStyle",
+    "layoutStyle",
+    "design",
+    "accent",
+    "tone",
+  ];
+  const cleaned = {};
+
+  allowedFields.forEach((field) => {
+    const value = cleanString(suggestion[field], 160);
+
+    if (value) {
+      cleaned[field] = value;
+    }
+  });
+
+  return Object.keys(cleaned).length > 0 ? cleaned : null;
+}
+
+function getCertificateDisplayMetadata(source = {}) {
+  const metadata = {};
+
+  CERTIFICATE_DISPLAY_FIELDS.forEach((field) => {
+    const maxLength = field === "description" || field === "remarks" ? 900 : 240;
+    const value = cleanString(source[field], maxLength);
+
+    if (value) {
+      metadata[field] = value;
+    }
+  });
+
+  metadata.certificateTitle =
+    metadata.certificateTitle || DEFAULT_CERTIFICATE_TITLE;
+  metadata.certificateSubtitle =
+    metadata.certificateSubtitle || DEFAULT_CERTIFICATE_SUBTITLE;
+  metadata.certificateDesign =
+    metadata.certificateDesign || "classicAcademic";
+
+  const templateDataUrl = cleanString(
+    source.certificateTemplateDataUrl,
+    MAX_CERTIFICATE_TEMPLATE_DATA_URL_LENGTH + 1,
+  );
+
+  if (templateDataUrl) {
+    if (
+      templateDataUrl.length > MAX_CERTIFICATE_TEMPLATE_DATA_URL_LENGTH ||
+      !/^data:image\/(png|jpe?g);base64,/i.test(templateDataUrl)
+    ) {
+      throw new HttpsError(
+        "invalid-argument",
+        "Certificate template image is too large or is not a supported image.",
+      );
+    }
+
+    metadata.certificateTemplateDataUrl = templateDataUrl;
+  }
+
+  const aiDesignSuggestion = cleanAiDesignSuggestion(source.aiDesignSuggestion);
+
+  if (aiDesignSuggestion) {
+    metadata.aiDesignSuggestion = aiDesignSuggestion;
+  }
+
+  return metadata;
 }
 
 function timestamp() {
@@ -1161,8 +1257,8 @@ exports.issueCertificate = onCall(
   async (request) => {
     try {
       const caller = await requireActiveTeacher(request);
-      const { studentName, studentEmail, courseName, issueDate } =
-        request.data ?? {};
+      const requestData = request.data ?? {};
+      const { studentName, studentEmail, courseName, issueDate } = requestData;
 
       if (
         typeof studentName !== "string" ||
@@ -1212,11 +1308,13 @@ exports.issueCertificate = onCall(
         issuedBy: caller.uid,
         issuedByEmail: caller.email,
       };
+      const displayMetadata = getCertificateDisplayMetadata(requestData);
       const certificateHash = computeCertificateHash(certificateData);
       const batch = db.batch();
 
       batch.set(certificateRef, {
         ...certificateData,
+        ...displayMetadata,
         organizationName,
         status: "issued",
         blockchainStatus: "pending",
@@ -1320,6 +1418,7 @@ exports.issueCertificate = onCall(
         certificateRef,
         certificate: {
           ...certificateData,
+          ...displayMetadata,
           organizationName,
           certificateHash,
           blockchainStatus,
@@ -1337,6 +1436,7 @@ exports.issueCertificate = onCall(
         certificateRef,
         certificate: {
           ...certificateData,
+          ...displayMetadata,
           organizationName,
           certificateHash,
           blockchainStatus,
@@ -1427,6 +1527,7 @@ exports.issueBulkCertificates = onCall(
         const studentEmail = normalizeEmail(row?.studentEmail);
         const courseName = cleanName(row?.courseName);
         const issueDate = cleanName(row?.issueDate);
+        let displayMetadata = {};
 
         if (!studentName) {
           validationErrors.push(`Row ${rowNumber}: studentName is required`);
@@ -1446,11 +1547,18 @@ exports.issueBulkCertificates = onCall(
           validationErrors.push(`Row ${rowNumber}: issueDate is required`);
         }
 
+        try {
+          displayMetadata = getCertificateDisplayMetadata(row);
+        } catch (error) {
+          validationErrors.push(`Row ${rowNumber}: ${error.message}`);
+        }
+
         return {
           studentName,
           studentEmail,
           courseName,
           issueDate,
+          displayMetadata,
         };
       });
 
@@ -1472,7 +1580,10 @@ exports.issueBulkCertificates = onCall(
         const certificateId = certificateRef.id;
         const certificateData = {
           certificateId,
-          ...row,
+          studentName: row.studentName,
+          studentEmail: row.studentEmail,
+          courseName: row.courseName,
+          issueDate: row.issueDate,
           organizationId: organization.id,
           organizationName: organization.name,
           issuedBy: caller.uid,
@@ -1482,6 +1593,7 @@ exports.issueBulkCertificates = onCall(
         return {
           certificateRef,
           certificateData,
+          displayMetadata: row.displayMetadata,
           certificateHash: computeCertificateHash(certificateData),
         };
       });
@@ -1496,6 +1608,7 @@ exports.issueBulkCertificates = onCall(
       certificateRows.forEach((certificate, index) => {
         writeBatch.set(certificate.certificateRef, {
           ...certificate.certificateData,
+          ...certificate.displayMetadata,
           certificateHash: certificate.certificateHash,
           status: "issued",
           blockchainStatus: "pending",
@@ -1644,11 +1757,12 @@ exports.issueBulkCertificates = onCall(
 
       const ipfsResults = await Promise.all(
         certificateRows.map(
-          ({ certificateRef, certificateData, certificateHash }, index) =>
+          ({ certificateRef, certificateData, displayMetadata, certificateHash }, index) =>
             uploadAndRecordCertificateMetadata({
               certificateRef,
               certificate: {
                 ...certificateData,
+                ...displayMetadata,
                 certificateHash,
                 batchId,
                 batchRoot: merkleBatch.root,
@@ -1687,11 +1801,12 @@ exports.issueBulkCertificates = onCall(
         });
 
       const emailResults = await Promise.all(
-        certificateRows.map(({ certificateRef, certificateData, certificateHash }, index) =>
+        certificateRows.map(({ certificateRef, certificateData, displayMetadata, certificateHash }, index) =>
           sendAndRecordCertificateEmail({
             certificateRef,
             certificate: {
               ...certificateData,
+              ...displayMetadata,
               certificateHash,
               batchId,
               batchRoot: merkleBatch.root,

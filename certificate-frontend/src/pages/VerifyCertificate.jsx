@@ -9,7 +9,6 @@ import {
   verifyCertificateOnChain,
 } from "../blockchain/verifyCertificateOnChain";
 import { ThemeToggle } from "../components/ThemeProvider";
-import { generateCertificatePdf } from "../utils/certificatePdf";
 import { shareCertificate } from "../utils/shareCertificate";
 import { useToast } from "../components/toastContext";
 
@@ -398,6 +397,7 @@ export default function VerifyCertificate() {
     setPdfLoading(true);
 
     try {
+      const { generateCertificatePdf } = await import("../utils/certificatePdf");
       const resolvedOrganizationName =
         organizationName || getFallbackOrganizationName(certificate);
 
@@ -541,13 +541,20 @@ export default function VerifyCertificate() {
 
   const certificateRows = [
     ["Certificate ID", certificate?.certificateId || certificate?.id],
+    ["Certificate Title", certificate?.certificateTitle],
     ["Student Name", certificate?.studentName],
     ["Student Email", certificate?.studentEmail],
     ["Course Name", certificate?.courseName],
+    ["Description", certificate?.description],
+    ["Grade / Result", certificate?.gradeOrResult],
+    ["Duration", certificate?.duration],
+    ["Venue", certificate?.venue],
+    ["Instructor", certificate?.instructorName],
+    ["Remarks", certificate?.remarks],
     ["Issue Date", certificate?.issueDate],
     ["Organization", organizationName || getFallbackOrganizationName(certificate)],
     ["Issued By Email", certificate?.issuedByEmail],
-  ];
+  ].filter(([, value]) => value !== undefined && value !== null && value !== "");
 
   const statusCards = [
     {
