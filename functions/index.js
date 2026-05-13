@@ -3,6 +3,7 @@ const { defineSecret } = require("firebase-functions/params");
 const admin = require("firebase-admin");
 const sgMail = require("@sendgrid/mail");
 const {
+  buildCanonicalCertificatePayload,
   computeCertificateHash,
 } = require("./blockchain/certificateHash");
 const { buildMerkleBatch } = require("./blockchain/merkleBatch");
@@ -1308,14 +1309,16 @@ exports.issueCertificate = onCall(
         issuedBy: caller.uid,
         issuedByEmail: caller.email,
       };
+      const canonicalPayload = buildCanonicalCertificatePayload(certificateData);
       const displayMetadata = getCertificateDisplayMetadata(requestData);
-      const certificateHash = computeCertificateHash(certificateData);
+      const certificateHash = computeCertificateHash(canonicalPayload);
       const batch = db.batch();
 
       batch.set(certificateRef, {
         ...certificateData,
         ...displayMetadata,
         organizationName,
+        certificateHash,
         status: "issued",
         blockchainStatus: "pending",
         ipfsStatus: "pending",
@@ -1585,16 +1588,19 @@ exports.issueBulkCertificates = onCall(
           courseName: row.courseName,
           issueDate: row.issueDate,
           organizationId: organization.id,
-          organizationName: organization.name,
           issuedBy: caller.uid,
           issuedByEmail: caller.email,
         };
+        const canonicalPayload = buildCanonicalCertificatePayload(certificateData);
 
         return {
           certificateRef,
-          certificateData,
+          certificateData: {
+            ...certificateData,
+            organizationName: organization.name,
+          },
           displayMetadata: row.displayMetadata,
-          certificateHash: computeCertificateHash(certificateData),
+          certificateHash: computeCertificateHash(canonicalPayload),
         };
       });
       const merkleBatch = buildMerkleBatch(

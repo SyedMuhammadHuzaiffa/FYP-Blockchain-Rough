@@ -3,7 +3,10 @@ import { Link, useParams } from "react-router-dom";
 import { ethers } from "ethers";
 import { doc, getDoc } from "firebase/firestore";
 import { db } from "../firebase";
-import { computeCertificateHash } from "../blockchain/certificateHash";
+import {
+  buildCanonicalCertificatePayload,
+  computeCertificateHash,
+} from "../blockchain/certificateHash";
 import {
   verifyBatchOnChain,
   verifyCertificateOnChain,
@@ -103,8 +106,10 @@ function getHashMatch({ certificate, computedHash, onChain }) {
 }
 
 function getBlockchainResult({ blockchainCheck, certificate }) {
-  if (!blockchainCheck.checked) return BLOCKCHAIN_RESULT.CHECKING;
-  if (blockchainCheck.loading) return BLOCKCHAIN_RESULT.CHECKING;
+  if (blockchainCheck.loading || !blockchainCheck.checked) {
+    return BLOCKCHAIN_RESULT.CHECKING;
+  }
+
   if (blockchainCheck.error) return BLOCKCHAIN_RESULT.FAILED;
 
   const { onChain, computedHash } = blockchainCheck;
@@ -325,7 +330,8 @@ export default function VerifyCertificate() {
     async function checkBlockchain() {
       if (!certificate) return;
 
-      const computedHash = computeCertificateHash(certificate);
+      const canonicalPayload = buildCanonicalCertificatePayload(certificate);
+      const computedHash = computeCertificateHash(canonicalPayload);
       const isBulk = isBulkCertificate(certificate);
       const merkleProofValid = isBulk
         ? verifyMerkleProof({
