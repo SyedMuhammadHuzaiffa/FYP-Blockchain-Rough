@@ -35,8 +35,14 @@ const emptyCertificateForm = {
 
 const MAX_BULK_CERTIFICATES = 200;
 const MAX_TEMPLATE_DATA_URL_LENGTH = 900000;
+const MAX_BULK_CSV_FILE_SIZE_BYTES = 1024 * 1024;
 const BULK_CSV_HEADER =
   "studentName,studentEmail,courseName,issueDate,certificateTitle,description,gradeOrResult,duration,venue,instructorName,remarks";
+const BULK_SAMPLE_CSV = [
+  BULK_CSV_HEADER,
+  "Ayesha Khan,ayesha@example.com,Blockchain Basics,2026-05-13",
+  "Ali Raza,ali@example.com,Smart Contracts,2026-05-13,Certificate of Achievement,Completed the advanced smart contracts workshop,Distinction,4 weeks,Main Auditorium,Dr. Khan,Issued during final demo",
+].join("\n");
 const CERTIFICATE_DESIGNS = [
   { value: "classicAcademic", label: "Classic Academic" },
   { value: "modernMinimal", label: "Modern Minimal" },
@@ -231,6 +237,19 @@ function parseBulkCertificateInput(input) {
     rows,
     validationErrors,
   };
+}
+
+function downloadCsvFile(fileName, contents) {
+  const blob = new Blob([contents], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 function getReadableError(error) {
@@ -704,6 +723,8 @@ export default function OrgAdminDashboard({ user, view = "overview" }) {
   const [teacherForm, setTeacherForm] = useState(emptyTeacherForm);
   const [certificateForm, setCertificateForm] = useState(emptyCertificateForm);
   const [bulkCsvInput, setBulkCsvInput] = useState("");
+  const [bulkCsvFileName, setBulkCsvFileName] = useState("");
+  const [bulkCsvFileError, setBulkCsvFileError] = useState("");
   const [bulkRows, setBulkRows] = useState([]);
   const [bulkValidationErrors, setBulkValidationErrors] = useState([]);
   const [bulkPreviewReady, setBulkPreviewReady] = useState(false);
@@ -940,9 +961,130 @@ export default function OrgAdminDashboard({ user, view = "overview" }) {
 
   const updateBulkCsvInput = (value) => {
     setBulkCsvInput(value);
+    setBulkCsvFileName("");
+    setBulkCsvFileError("");
     setBulkRows([]);
     setBulkValidationErrors([]);
     setBulkPreviewReady(false);
+  };
+
+  const previewBulkCsvText = (
+    value,
+    {
+      showToast = true,
+      successMessage = "",
+      warningMessage = "Fix the highlighted bulk rows before issuing.",
+    } = {},
+  ) => {
+    const { rows, validationErrors } = parseBulkCertificateInput(value);
+    const previewReady = validationErrors.length === 0 && rows.length > 0;
+
+    setBulkRows(rows);
+    setBulkValidationErrors(validationErrors);
+    setBulkPreviewReady(previewReady);
+
+    if (showToast) {
+      if (validationErrors.length > 0) {
+        toast.warning(warningMessage);
+      } else {
+        toast.info(
+          successMessage ||
+            `Preview ready for ${rows.length} bulk certificate row(s).`,
+        );
+      }
+    }
+
+    return {
+      rows,
+      validationErrors,
+      previewReady,
+    };
+  };
+
+  const handleBulkCsvFileUpload = (file) => {
+    setBulkCsvFileError("");
+
+    if (!file) return;
+
+    const fileName = file.name || "selected file";
+    const hasCsvExtension = fileName.toLowerCase().endsWith(".csv");
+    const hasCsvType =
+      !file.type ||
+      file.type === "text/csv" ||
+      file.type === "application/csv" ||
+      file.type === "application/vnd.ms-excel";
+
+    if (!hasCsvExtension || !hasCsvType) {
+      const message = "Upload a valid .csv file.";
+
+      setBulkCsvFileName("");
+      setBulkCsvFileError(message);
+      toast.warning(message);
+      return;
+    }
+
+    if (file.size > MAX_BULK_CSV_FILE_SIZE_BYTES) {
+      const message = "CSV file must be 1MB or smaller.";
+
+      setBulkCsvFileName("");
+      setBulkCsvFileError(message);
+      toast.warning(message);
+      return;
+    }
+
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      const fileText =
+        typeof reader.result === "string"
+          ? reader.result.replace(/^\uFEFF/, "")
+          : "";
+
+      if (!fileText.trim()) {
+        const message = "The selected CSV file is empty.";
+
+        setBulkCsvInput("");
+        setBulkCsvFileName("");
+        setBulkCsvFileError(message);
+        setBulkRows([]);
+        setBulkValidationErrors([]);
+        setBulkPreviewReady(false);
+        toast.warning(message);
+        return;
+      }
+
+      setBulkCsvInput(fileText);
+      setBulkCsvFileName(fileName);
+      setBulkCsvFileError("");
+
+      const result = previewBulkCsvText(fileText, { showToast: false });
+
+      if (result.validationErrors.length > 0) {
+        toast.warning(
+          `Loaded ${fileName}, but fix the highlighted rows before issuing.`,
+        );
+        return;
+      }
+
+      toast.info(
+        `Loaded ${fileName}. Preview ready for ${result.rows.length} row(s).`,
+      );
+    };
+
+    reader.onerror = () => {
+      const message = "Could not read the CSV file. Please try another file.";
+
+      setBulkCsvFileName("");
+      setBulkCsvFileError(message);
+      toast.error(message);
+    };
+
+    reader.readAsText(file);
+  };
+
+  const downloadBulkSampleCsv = () => {
+    downloadCsvFile("bulk-certificates-sample.csv", BULK_SAMPLE_CSV);
+    toast.info("Sample CSV downloaded.");
   };
 
   const copyVerifyLink = async (certificate) => {
@@ -1159,20 +1301,7 @@ export default function OrgAdminDashboard({ user, view = "overview" }) {
 
   const previewBulkCertificates = () => {
     setError("");
-
-    const { rows, validationErrors } =
-      parseBulkCertificateInput(bulkCsvInput);
-
-    setBulkRows(rows);
-    setBulkValidationErrors(validationErrors);
-    setBulkPreviewReady(validationErrors.length === 0 && rows.length > 0);
-
-    if (validationErrors.length > 0) {
-      toast.warning("Fix the highlighted bulk rows before issuing.");
-      return;
-    }
-
-    toast.info(`Preview ready for ${rows.length} bulk certificate row(s).`);
+    previewBulkCsvText(bulkCsvInput);
   };
 
   const issueBulkCertificates = async () => {
@@ -1199,6 +1328,8 @@ export default function OrgAdminDashboard({ user, view = "overview" }) {
       const blockchainStatus = result.data?.blockchainStatus || "pending";
 
       setBulkCsvInput("");
+      setBulkCsvFileName("");
+      setBulkCsvFileError("");
       setBulkRows([]);
       setBulkValidationErrors([]);
       setBulkPreviewReady(false);
@@ -1765,7 +1896,7 @@ export default function OrgAdminDashboard({ user, view = "overview" }) {
                 <div>
                   <h2>Bulk Issue Certificates</h2>
                   <p className="muted">
-                    Paste CSV rows, preview validation, then create a Merkle batch.
+                    Upload or paste CSV rows, preview validation, then create a Merkle batch.
                   </p>
                 </div>
                 {bulkPreviewReady ? (
@@ -1776,6 +1907,40 @@ export default function OrgAdminDashboard({ user, view = "overview" }) {
               </div>
 
               <div className="form-grid">
+                <label className="field full-width">
+                  <span>Upload CSV File</span>
+                  <input
+                    className="input"
+                    type="file"
+                    accept=".csv,text/csv"
+                    onChange={(event) => {
+                      handleBulkCsvFileUpload(event.target.files?.[0]);
+                      event.target.value = "";
+                    }}
+                    disabled={issuingBulkCertificates}
+                  />
+                  {bulkCsvFileName ? (
+                    <span className="bulk-file-meta">
+                      Selected file: {bulkCsvFileName}
+                    </span>
+                  ) : null}
+                  {bulkCsvFileError ? (
+                    <span className="bulk-file-error">{bulkCsvFileError}</span>
+                  ) : null}
+                </label>
+
+                <div className="alert bulk-format-help full-width">
+                  <strong>Supported CSV formats</strong>
+                  <span>
+                    Basic: studentName,studentEmail,courseName,issueDate
+                  </span>
+                  <span>
+                    Extended:
+                    {" "}
+                    studentName,studentEmail,courseName,issueDate,certificateTitle,description,gradeOrResult,duration,venue,instructorName,remarks
+                  </span>
+                </div>
+
                 <label className="field full-width">
                   <span>CSV Rows</span>
                   <textarea
@@ -1789,6 +1954,14 @@ export default function OrgAdminDashboard({ user, view = "overview" }) {
                 </label>
 
                 <div className="button-row full-width">
+                  <button
+                    type="button"
+                    onClick={downloadBulkSampleCsv}
+                    disabled={issuingBulkCertificates}
+                    className="button button-tonal"
+                  >
+                    Download Sample CSV
+                  </button>
                   <button
                     type="button"
                     onClick={previewBulkCertificates}

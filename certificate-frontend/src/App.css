@@ -731,6 +731,28 @@ input:not([class]):focus {
   margin-top: 16px;
 }
 
+.bulk-format-help {
+  display: grid;
+  gap: 6px;
+}
+
+.bulk-format-help span,
+.bulk-file-meta,
+.bulk-file-error {
+  font-size: 0.88rem;
+  font-weight: 680;
+  overflow-wrap: anywhere;
+}
+
+.bulk-format-help span,
+.bulk-file-meta {
+  color: var(--muted);
+}
+
+.bulk-file-error {
+  color: var(--error);
+}
+
 .list-toolbar {
   display: grid;
   grid-template-columns: minmax(240px, 1fr) minmax(160px, 220px);
