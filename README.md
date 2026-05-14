@@ -1,4 +1,4 @@
-# FYP-Blockchain-Rough
+# BlockChain-Based-Certificate-Generation-Validation-and-Revocation-System-FYP
 
 ![License](https://img.shields.io/badge/license-TBD-lightgrey)
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)
@@ -10,7 +10,7 @@
 
 > A blockchain-based certificate verification platform with Firebase authentication, public QR verification, IPFS metadata storage, and gas-efficient Merkle tree batch issuance on Polygon Amoy.
 
-**GitHub:** FYP-Blockchain-Rough Repository
+**GitHub:** BlockChain-Based-Certificate-Generation-Validation-and-Revocation-System-FYP Repository
 
 ## Overview
 
