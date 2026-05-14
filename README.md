@@ -14,7 +14,7 @@
 
 ## Overview
 
-**FYP-Blockchain-Rough** is a full-stack certificate issuance and verification system designed to reduce certificate fraud in academic and professional environments. Traditional certificate verification depends on manual calls, emails, database checks, or easily forged PDF/image documents. This creates delays for employers, institutions, and students, while fake credentials can circulate with little friction.
+**BlockChain-Based-Certificate-Generation-Validation-and-Revocation-System-FYP** is a full-stack certificate issuance and verification system designed to reduce certificate fraud in academic and professional environments. Traditional certificate verification depends on manual calls, emails, database checks, or easily forged PDF/image documents. This creates delays for employers, institutions, and students, while fake credentials can circulate with little friction.
 
 This project solves that problem by combining:
 
@@ -189,7 +189,7 @@ Clone the repository and install dependencies for each workspace:
 
 ```bash
 git clone <repository-url>
-cd FYP-Blockchain-Rough
+cd BlockChain-Based-Certificate-Generation-Validation-and-Revocation-System-FYP
 
 npm install
 
