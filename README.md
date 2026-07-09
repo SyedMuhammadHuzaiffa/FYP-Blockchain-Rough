@@ -42,19 +42,37 @@ The result is a practical verification workflow: organizations issue certificate
 - 🚫 **Revocation support** for blockchain-confirmed certificates and batches.
 - 🚀 **Vercel-ready frontend routing** with SPA fallback support.
 
+## Product Screenshots
+
+### Dashboard
+
+![Dashboard](certificate-frontend/public/screenshots/dashboard.png)
+
+### Certificate Issuance
+
+![Certificate Issuance](certificate-frontend/public/screenshots/issue-certificate.png)
+
+### Public Verification
+
+![Public Verification](certificate-frontend/public/screenshots/public-verify.png)
+
+### Certificate PDF
+
+![Certificate PDF](certificate-frontend/public/screenshots/certificate.png)
+
 ## Tech Stack
 
-| Layer | Technology |
-| --- | --- |
-| Frontend | React, Vite, React Router, Firebase Web SDK |
-| Backend | Firebase Cloud Functions, Firebase Admin SDK, Node.js |
-| Database | Cloud Firestore |
-| Authentication | Firebase Authentication |
-| Blockchain | Solidity, Hardhat, ethers.js |
-| Network | Polygon Amoy testnet |
-| Storage | IPFS metadata through Pinata |
-| Verification | QR codes, public verification URLs, Merkle proofs |
-| Deployment | Vercel frontend, Firebase Functions backend |
+| Layer          | Technology                                            |
+| -------------- | ----------------------------------------------------- |
+| Frontend       | React, Vite, React Router, Firebase Web SDK           |
+| Backend        | Firebase Cloud Functions, Firebase Admin SDK, Node.js |
+| Database       | Cloud Firestore                                       |
+| Authentication | Firebase Authentication                               |
+| Blockchain     | Solidity, Hardhat, ethers.js                          |
+| Network        | Polygon Amoy testnet                                  |
+| Storage        | IPFS metadata through Pinata                          |
+| Verification   | QR codes, public verification URLs, Merkle proofs     |
+| Deployment     | Vercel frontend, Firebase Functions backend           |
 
 ## Architecture Overview
 
@@ -352,15 +370,15 @@ Public verifiers do not need an account. They can scan the QR code, open the ver
 
 Add screenshots or demo GIFs here before publishing the repository:
 
-| Screen | Placeholder |
-| --- | --- |
-| Login | `docs/screenshots/login.png` |
-| Super Admin Dashboard | `docs/screenshots/super-admin.png` |
-| Organization Admin Dashboard | `docs/screenshots/org-admin.png` |
-| Teacher Single Issuance | `docs/screenshots/single-issue.png` |
-| Teacher Bulk Issuance | `docs/screenshots/bulk-issue.png` |
-| Student Dashboard | `docs/screenshots/student-dashboard.png` |
-| Public Verification | `docs/screenshots/public-verification.png` |
+| Screen                       | Placeholder                                |
+| ---------------------------- | ------------------------------------------ |
+| Login                        | `docs/screenshots/login.png`               |
+| Super Admin Dashboard        | `docs/screenshots/super-admin.png`         |
+| Organization Admin Dashboard | `docs/screenshots/org-admin.png`           |
+| Teacher Single Issuance      | `docs/screenshots/single-issue.png`        |
+| Teacher Bulk Issuance        | `docs/screenshots/bulk-issue.png`          |
+| Student Dashboard            | `docs/screenshots/student-dashboard.png`   |
+| Public Verification          | `docs/screenshots/public-verification.png` |
 
 ## Security Notes
 
