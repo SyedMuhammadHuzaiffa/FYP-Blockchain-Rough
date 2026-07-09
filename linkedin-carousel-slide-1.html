@@ -1,0 +1,575 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Blockchain-Based Certificate Verification System - LinkedIn Cover</title>
+  <style>
+    :root {
+      --primary: #d0bcff;
+      --primary-strong: #eaddff;
+      --primary-container: #4f378b;
+      --on-primary-container: #eaddff;
+      --secondary: #ccc2dc;
+      --success: #9fd9af;
+      --success-container: #0f3f28;
+      --warning: #f0c36a;
+      --background: #131316;
+      --surface: #1d1b20;
+      --surface-container: #211f26;
+      --surface-container-high: #2b2930;
+      --text: #f4eff4;
+      --muted: #cac4d0;
+      --outline-variant: #49454f;
+      --glass-bg: rgba(29, 27, 32, 0.64);
+      --glass-bg-strong: rgba(35, 32, 41, 0.82);
+      --glass-border: rgba(255, 255, 255, 0.12);
+      --glass-shadow: 0 26px 80px rgba(0, 0, 0, 0.42);
+      --glass-highlight: rgba(255, 255, 255, 0.16);
+      --glow-primary: rgba(208, 188, 255, 0.22);
+      --mesh-a: rgba(208, 188, 255, 0.18);
+      --mesh-b: rgba(76, 195, 210, 0.12);
+      --mesh-c: rgba(159, 217, 175, 0.1);
+      --mesh-d: rgba(240, 195, 106, 0.1);
+      --line: rgba(208, 188, 255, 0.1);
+    }
+
+    * {
+      box-sizing: border-box;
+      letter-spacing: 0;
+    }
+
+    body {
+      min-height: 100vh;
+      margin: 0;
+      display: grid;
+      place-items: center;
+      background: #131316;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    .slide {
+      position: relative;
+      width: 1080px;
+      height: 1080px;
+      overflow: hidden;
+      color: var(--text);
+      background:
+        linear-gradient(135deg, rgba(255, 255, 255, 0.12), transparent 38%),
+        radial-gradient(ellipse at 16% 0%, var(--mesh-a), transparent 34rem),
+        radial-gradient(ellipse at 92% 8%, var(--mesh-b), transparent 31rem),
+        radial-gradient(ellipse at 54% 100%, var(--mesh-c), transparent 30rem),
+        radial-gradient(ellipse at 88% 88%, var(--mesh-d), transparent 26rem),
+        var(--background);
+    }
+
+    .slide::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(var(--line) 1px, transparent 1px),
+        linear-gradient(90deg, var(--line) 1px, transparent 1px);
+      background-size: 72px 72px;
+      mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.48), transparent 84%);
+      opacity: 0.72;
+    }
+
+    .slide::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(90deg, rgba(19, 19, 22, 0.94), rgba(19, 19, 22, 0.42) 56%, rgba(19, 19, 22, 0.3)),
+        linear-gradient(180deg, rgba(19, 19, 22, 0.12), rgba(19, 19, 22, 0.72));
+      pointer-events: none;
+    }
+
+    .content {
+      position: relative;
+      z-index: 2;
+      height: 100%;
+      padding: 78px 82px 68px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      color: var(--muted);
+      font-size: 24px;
+      font-weight: 600;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      min-height: 48px;
+      padding: 0 18px;
+      border: 1px solid color-mix(in srgb, var(--primary) 28%, var(--glass-border));
+      border-radius: 999px;
+      background:
+        linear-gradient(135deg, var(--glass-highlight), transparent 42%),
+        color-mix(in srgb, var(--primary-container) 78%, transparent);
+      box-shadow:
+        0 14px 30px var(--glow-primary),
+        inset 0 1px 0 var(--glass-highlight);
+      color: var(--on-primary-container);
+    }
+
+    .badge-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: var(--success);
+      box-shadow: 0 0 20px rgba(159, 217, 175, 0.28);
+    }
+
+    .campus {
+      max-width: 520px;
+      text-align: right;
+      line-height: 1.25;
+      font-size: 22px;
+    }
+
+    .hero {
+      width: 720px;
+      margin-top: 80px;
+    }
+
+    .eyebrow {
+      margin: 0 0 22px;
+      color: var(--primary);
+      font-size: 28px;
+      font-weight: 700;
+    }
+
+    h1 {
+      margin: 0;
+      max-width: 760px;
+      font-size: 82px;
+      line-height: 0.98;
+      font-weight: 850;
+      text-wrap: balance;
+      text-shadow: 0 18px 55px rgba(72, 62, 102, 0.16);
+    }
+
+    .title-accent {
+      color: transparent;
+      background: linear-gradient(90deg, var(--primary-strong) 0%, var(--primary) 52%, #4cc3d2 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+    }
+
+    .subline {
+      width: 520px;
+      margin-top: 30px;
+      color: var(--muted);
+      font-size: 26px;
+      line-height: 1.45;
+      font-weight: 500;
+    }
+
+    .team {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 40px;
+      color: var(--muted);
+    }
+
+    .team-label {
+      margin-bottom: 14px;
+      color: var(--primary);
+      font-size: 22px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .names {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 8px;
+      font-size: 25px;
+      line-height: 1.2;
+      font-weight: 600;
+    }
+
+    .leader {
+      color: var(--text);
+    }
+
+    .page-number {
+      color: color-mix(in srgb, var(--primary) 70%, var(--muted));
+      font-size: 28px;
+      font-weight: 700;
+    }
+
+    .visual-layer {
+      position: absolute;
+      z-index: 1;
+      inset: 0;
+      pointer-events: none;
+    }
+
+    .dashboard {
+      position: absolute;
+      top: 178px;
+      right: -32px;
+      width: 438px;
+      height: 584px;
+      border: 1px solid var(--glass-border);
+      border-radius: 8px;
+      background:
+        linear-gradient(135deg, var(--glass-highlight), transparent 32%),
+        var(--glass-bg);
+      box-shadow: var(--glass-shadow);
+      backdrop-filter: blur(22px) saturate(150%);
+      -webkit-backdrop-filter: blur(22px) saturate(150%);
+      transform: perspective(900px) rotateY(-10deg) rotateX(2deg);
+    }
+
+    .dashboard-header {
+      height: 70px;
+      border-bottom: 1px solid color-mix(in srgb, var(--glass-border) 68%, transparent);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 26px;
+    }
+
+    .window-dot {
+      width: 13px;
+      height: 13px;
+      border-radius: 50%;
+      background: var(--primary);
+    }
+
+    .window-dot:nth-child(2) {
+      background: #4cc3d2;
+    }
+
+    .window-dot:nth-child(3) {
+      background: #f0c36a;
+    }
+
+    .metric-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      padding: 24px;
+    }
+
+    .metric {
+      height: 90px;
+      border: 1px solid var(--glass-border);
+      border-radius: 8px;
+      background:
+        linear-gradient(135deg, var(--glass-highlight), transparent 42%),
+        color-mix(in srgb, var(--surface-container-high) 82%, transparent);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .metric::before {
+      content: "";
+      position: absolute;
+      left: 18px;
+      top: 22px;
+      width: 72px;
+      height: 10px;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--primary) 28%, transparent);
+      box-shadow: 0 24px 0 color-mix(in srgb, var(--success) 22%, transparent);
+    }
+
+    .chart {
+      height: 178px;
+      margin: 0 24px;
+      border: 1px solid var(--glass-border);
+      border-radius: 8px;
+      background:
+        linear-gradient(180deg, transparent 30%, color-mix(in srgb, var(--primary) 10%, transparent)),
+        repeating-linear-gradient(0deg, transparent 0 35px, rgba(208, 188, 255, 0.08) 36px);
+      clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+      position: relative;
+    }
+
+    .chart svg {
+      position: absolute;
+      inset: 0;
+    }
+
+    .rows {
+      margin: 24px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .row {
+      height: 18px;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--secondary) 16%, transparent);
+    }
+
+    .row:nth-child(2) {
+      width: 78%;
+      background: color-mix(in srgb, var(--primary) 24%, transparent);
+    }
+
+    .row:nth-child(3) {
+      width: 64%;
+    }
+
+    .certificate-card {
+      position: absolute;
+      right: 128px;
+      bottom: 190px;
+      width: 280px;
+      height: 370px;
+      border: 1px solid var(--glass-border);
+      border-radius: 8px;
+      background:
+        linear-gradient(135deg, rgba(255, 255, 255, 0.12), rgba(79, 55, 139, 0.34)),
+        var(--surface);
+      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.38);
+      color: var(--text);
+      transform: rotate(-4deg);
+    }
+
+    .cert-inner {
+      position: absolute;
+      inset: 22px;
+      border: 1px solid color-mix(in srgb, var(--primary) 28%, var(--outline-variant));
+      border-radius: 8px;
+      padding: 24px 22px;
+    }
+
+    .seal {
+      width: 54px;
+      height: 54px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      background: linear-gradient(135deg, var(--primary-container), color-mix(in srgb, var(--primary) 20%, var(--surface)));
+      color: var(--on-primary-container);
+      font-size: 30px;
+      font-weight: 900;
+      box-shadow: 0 14px 26px var(--glow-primary);
+    }
+
+    .cert-line {
+      height: 10px;
+      margin-top: 26px;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--secondary) 20%, transparent);
+    }
+
+    .cert-line.short {
+      width: 62%;
+      margin-top: 14px;
+    }
+
+    .qr {
+      position: absolute;
+      right: 24px;
+      bottom: 24px;
+      width: 82px;
+      height: 82px;
+      padding: 7px;
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--surface) 74%, #ffffff);
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      grid-template-rows: repeat(5, 1fr);
+      gap: 4px;
+    }
+
+    .qr span {
+      border-radius: 2px;
+      background: #21005d;
+    }
+
+    .verify-pill {
+      position: absolute;
+      left: 26px;
+      bottom: 31px;
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      color: var(--success);
+      font-size: 15px;
+      font-weight: 900;
+    }
+
+    .check {
+      width: 27px;
+      height: 27px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      background: var(--success-container);
+      color: var(--success);
+    }
+
+    .node-map {
+      position: absolute;
+      top: 350px;
+      right: 78px;
+      width: 430px;
+      height: 300px;
+      opacity: 0.82;
+    }
+
+    .node-line {
+      stroke: rgba(208, 188, 255, 0.32);
+      stroke-width: 2;
+    }
+
+    .node {
+      fill: rgba(208, 188, 255, 0.9);
+      filter: drop-shadow(0 0 10px rgba(208, 188, 255, 0.32));
+    }
+
+    .node.alt {
+      fill: rgba(159, 217, 175, 0.86);
+    }
+
+    .hash-strip {
+      position: absolute;
+      left: 82px;
+      right: 82px;
+      bottom: 154px;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--primary) 42%, transparent), transparent);
+    }
+
+    .hash-code {
+      position: absolute;
+      right: 74px;
+      top: 804px;
+      width: 370px;
+      color: color-mix(in srgb, var(--primary) 22%, transparent);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 18px;
+      line-height: 1.65;
+      transform: rotate(-2deg);
+    }
+  </style>
+</head>
+<body>
+  <main class="slide" aria-label="LinkedIn carousel cover slide for Blockchain-Based Certificate Verification System">
+    <section class="visual-layer" aria-hidden="true">
+      <div class="dashboard">
+        <div class="dashboard-header">
+          <span class="window-dot"></span>
+          <span class="window-dot"></span>
+          <span class="window-dot"></span>
+        </div>
+        <div class="metric-row">
+          <div class="metric"></div>
+          <div class="metric"></div>
+        </div>
+        <div class="chart">
+          <svg viewBox="0 0 390 178" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 132 C72 96 95 122 142 82 C191 40 226 72 274 42 C316 16 346 30 380 18" stroke="rgba(159,217,175,0.78)" stroke-width="6" stroke-linecap="round"/>
+            <path d="M12 132 C72 96 95 122 142 82 C191 40 226 72 274 42 C316 16 346 30 380 18 L380 178 L12 178 Z" fill="rgba(159,217,175,0.10)"/>
+          </svg>
+        </div>
+        <div class="rows">
+          <span class="row"></span>
+          <span class="row"></span>
+          <span class="row"></span>
+        </div>
+      </div>
+
+      <svg class="node-map" viewBox="0 0 430 300" xmlns="http://www.w3.org/2000/svg">
+        <line class="node-line" x1="76" y1="70" x2="174" y2="34"/>
+        <line class="node-line" x1="174" y1="34" x2="300" y2="84"/>
+        <line class="node-line" x1="300" y1="84" x2="354" y2="172"/>
+        <line class="node-line" x1="354" y1="172" x2="214" y2="232"/>
+        <line class="node-line" x1="214" y1="232" x2="96" y2="190"/>
+        <line class="node-line" x1="96" y1="190" x2="76" y2="70"/>
+        <line class="node-line" x1="174" y1="34" x2="214" y2="232"/>
+        <line class="node-line" x1="76" y1="70" x2="300" y2="84"/>
+        <circle class="node" cx="76" cy="70" r="11"/>
+        <circle class="node alt" cx="174" cy="34" r="13"/>
+        <circle class="node" cx="300" cy="84" r="10"/>
+        <circle class="node alt" cx="354" cy="172" r="12"/>
+        <circle class="node" cx="214" cy="232" r="14"/>
+        <circle class="node" cx="96" cy="190" r="10"/>
+      </svg>
+
+      <div class="certificate-card">
+        <div class="cert-inner">
+          <div class="seal">✓</div>
+          <div class="cert-line"></div>
+          <div class="cert-line short"></div>
+          <div class="cert-line"></div>
+          <div class="cert-line short"></div>
+          <div class="verify-pill">
+            <span class="check">✓</span>
+            VERIFIED
+          </div>
+          <div class="qr">
+            <span></span><span></span><span></span><i></i><span></span>
+            <span></span><i></i><span></span><span></span><i></i>
+            <i></i><span></span><span></span><i></i><span></span>
+            <span></span><span></span><i></i><span></span><i></i>
+            <span></span><i></i><span></span><i></i><span></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="hash-code">
+        0x4a91...e8bf<br />
+        block #amoy<br />
+        sha256: verified
+      </div>
+      <div class="hash-strip"></div>
+    </section>
+
+    <section class="content">
+      <header class="topbar">
+        <div class="badge">
+          <span class="badge-dot"></span>
+          Final Year Project
+        </div>
+        <div class="campus">
+          FAST National University of Computer<br />
+          and Emerging Sciences<br />
+          Karachi Campus
+        </div>
+      </header>
+
+      <div class="hero">
+        <p class="eyebrow">Secure. Verifiable. Tamper-resistant.</p>
+        <h1>
+          Blockchain-Based<br />
+          <span class="title-accent">Certificate Verification</span><br />
+          System
+        </h1>
+        <p class="subline">
+          A modern digital credential platform powered by blockchain proof and instant QR verification.
+        </p>
+      </div>
+
+      <footer class="team">
+        <div>
+          <div class="team-label">Team</div>
+          <div class="names">
+            <span class="leader">Syed Muhammad Huzaifa &mdash; Group Leader</span>
+            <span>Tulaib Tauseef</span>
+            <span>Reeshaiel Shah</span>
+          </div>
+        </div>
+        <div class="page-number">01</div>
+      </footer>
+    </section>
+  </main>
+</body>
+</html>
