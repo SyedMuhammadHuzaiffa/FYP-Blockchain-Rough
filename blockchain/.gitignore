@@ -2,3 +2,8 @@ artifacts/
 cache/
 coverage/
 typechain-types/
+
+# Local environment files; keep the safe template tracked.
+.env
+.env.*
+!.env.example

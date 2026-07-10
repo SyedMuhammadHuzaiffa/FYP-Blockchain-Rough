@@ -62,8 +62,16 @@ node_modules/
 # Yarn Integrity file
 .yarn-integrity
 
-# dotenv environment variables file
+# Local environment files and credential artifacts
 .env
+.env.*
+!.env.example
+serviceAccount*.json
+service-account*.json
+firebase-adminsdk-*.json
+*.pem
+*.p12
+*.key
 
 # dataconnect generated files
 .dataconnect
