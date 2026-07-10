@@ -1,7 +1,30 @@
 import { ethers } from "ethers";
 
+export const POLYGON_AMOY_CHAIN_ID = 80002;
+
 const RPC_URL = "https://polygon-amoy.drpc.org";
-const CONTRACT_ADDRESS = "0xF0783186B4a5C64351932863A94B977B08df4683";
+const DEVELOPMENT_CONTRACT_ADDRESS =
+  "0xF0783186B4a5C64351932863A94B977B08df4683";
+
+function resolveContractAddress() {
+  const configuredAddress = String(
+    import.meta.env.VITE_CERTIFICATE_REGISTRY_ADDRESS || "",
+  ).trim();
+
+  if (!configuredAddress) {
+    return DEVELOPMENT_CONTRACT_ADDRESS;
+  }
+
+  if (!ethers.isAddress(configuredAddress)) {
+    throw new Error(
+      "VITE_CERTIFICATE_REGISTRY_ADDRESS must be a valid Ethereum address",
+    );
+  }
+
+  return ethers.getAddress(configuredAddress);
+}
+
+const CONTRACT_ADDRESS = resolveContractAddress();
 
 const CERTIFICATE_REGISTRY_ABI = [
   {
