@@ -94,20 +94,21 @@ The repository alone cannot verify steps 2 and 3 because the backend values are 
 
 | Check | PASS / FAIL / BLOCKED | Evidence or command result | Owner | Notes |
 | --- | --- | --- | --- | --- |
-| Firebase project and CLI account | BLOCKED | Local alias is `blockchain-certificates-7bea4`; Firebase CLI credentials require reauthentication before remote project access. | Deployment owner | Reauthenticate without recording a token. |
-| Functions deployed in `us-central1` | BLOCKED | `firebase functions:list` could not authenticate, so deployed callable Functions and region were not enumerated. | Deployment owner | Re-run after Firebase reauthentication. |
-| Secret names present only | BLOCKED | `gcloud` is unavailable and Firebase CLI cannot authenticate; no secret payloads were requested. | Deployment owner | Verify names only in Secret Manager. |
+| Firebase project and CLI account | PASS | Firebase CLI authenticated account can list `blockchain-certificates-7bea4`; it is the active project. | Repository |  |
+| Functions deployed in `us-central1` | PASS | Nine v2 callable Functions are deployed in `us-central1`: organization, role, single/bulk issuance, and revocation flows. | Firebase CLI |  |
+| Secret names present only | PASS | Secret Manager names confirmed: `BLOCKCHAIN_RPC_URL`, `BLOCKCHAIN_PRIVATE_KEY`, `CERTIFICATE_REGISTRY_ADDRESS`, `BLOCKCHAIN_CHAIN_ID`, `PINATA_JWT`, `SENDGRID_API_KEY`, and `FRONTEND_BASE_URL`. No payloads were opened. | Deployment owner |  |
 | Amoy RPC returns chain ID `80002` | PASS | Read-only ethers RPC call to `polygon-amoy.drpc.org` returned chain ID `80002`. | Public RPC |  |
 | Public verifier contract bytecode and owner | PASS | Bytecode is present at frontend fallback contract; public `owner()` read succeeded. | Public RPC | Owner is public chain metadata; it is not assumed to be the Functions issuer. |
 | Frontend and backend contract match | BLOCKED | Frontend fallback/public variable is known, but backend `CERTIFICATE_REGISTRY_ADDRESS` was not retrieved. | Deployment owner | Compare through authorized deployment configuration only. |
 | Backend chain configuration matches Amoy | BLOCKED | Frontend/public RPC is Amoy, but backend `BLOCKCHAIN_CHAIN_ID` was not retrieved. | Deployment owner | Confirm value is `80002` without disclosing it. |
-| Issuer authorized | BLOCKED | Functions issuer address is not present in tracked metadata; historical issuer-event query was unavailable from the public RPC. | Deployment owner | Supply the public issuer address, then run read-only `authorizedIssuers(address)`. |
-| Issuer wallet has Amoy POL | BLOCKED | Requires the public Functions issuer address. | Deployment owner | Check public balance after issuer address is supplied. |
-| `FRONTEND_BASE_URL` fallback is production URL | BLOCKED | No unique deployed frontend URL is tracked; backend environment value was not retrieved. | Deployment owner | Provide production URL and verify fallback configuration securely. |
-| Vercel route refreshes pass | BLOCKED | No unique deployed frontend URL was found in tracked configuration or public search. | Deployment owner | Provide the deployed URL for unauthenticated route checks. |
-| SendGrid invite reaches controlled inbox | BLOCKED | Delivery requires deployed Function confirmation and a live controlled-inbox test. | Deployment owner | Do not test with `.example` recipients. |
+| Issuer authorized | BLOCKED | Provided issuer string is not a valid EVM `0x...` address; safe contract read was not attempted with it. | Deployment owner | Supply the public Functions issuer address, then run read-only `authorizedIssuers(address)`. |
+| Issuer wallet has Amoy POL | BLOCKED | Requires a valid public Functions issuer address. | Deployment owner | Check public balance after issuer address is supplied. |
+| `FRONTEND_BASE_URL` fallback is production URL | BLOCKED | Production domain is known, but backend environment value was not retrieved. | Deployment owner | Verify fallback configuration securely. |
+| Vercel route refreshes pass | PASS | `https://fyp-blockchain-rough.vercel.app` returned HTTP 200 and the SPA shell for `/`, `/login`, `/register`, `/admin`, `/org-admin`, `/dashboard`, `/student`, and invalid verification. | Public HTTP/browser | Invalid route rendered `CERTIFICATE NOT FOUND`; no localhost text or browser console errors were observed. |
+| Frontend verifier deployment configuration | PASS | Vercel environment does not define `VITE_CERTIFICATE_REGISTRY_ADDRESS`; deployed frontend therefore uses the validated Amoy fallback. | Deployment owner | Exact backend/frontend equality remains blocked. |
+| SendGrid invite reaches controlled inbox | BLOCKED | Relevant callable Functions are deployed and `SENDGRID_API_KEY` name exists, but delivery needs a live controlled-inbox test. | Deployment owner | Do not test with `.example` recipients. |
 | Certificate email reaches controlled student inbox | BLOCKED | Delivery requires a live issuance to the controlled Student inbox. | Deployment owner | Perform after the contract and issuer checks pass. |
-| Pinata upload and public gateway pass | BLOCKED | Upload requires a live issuance; deployed Function/secret-name enumeration is currently blocked. | Deployment owner | Verify after Firebase access is restored. |
+| Pinata upload and public gateway pass | BLOCKED | Issuance Functions are deployed and `PINATA_JWT` name exists, but upload requires a live issuance. | Deployment owner | Verify after issuer checks pass. |
 | Historical `certificate-frontend/src/.env` review recorded | PASS | Empty and removed from tracking; local file preserved and ignored. | Repository |  |
 | Legacy contract/link sources assessed | PASS | Legacy files are documented and remain untouched pending production QA. | Repository | See `LEGACY_CODE_REVIEW.md`. |
 
@@ -115,6 +116,7 @@ The repository alone cannot verify steps 2 and 3 because the backend values are 
 
 - Verify the deployed backend contract secret and chain ID against the public verifier without exposing values.
 - Verify the public Functions issuer wallet is authorized and funded on Polygon Amoy.
+- Supply the valid public Functions issuer wallet address in EVM `0x` format; do not provide a private key.
 - Keep `certificate-frontend/src/.env` untracked; it is unused by Vite. Use `certificate-frontend/.env` only for optional public Vite variables when needed.
 - Use controlled real inboxes for Organization Admin, Teacher, and Student flows; replace the first-row CSV `studentEmail` before uploading.
 
