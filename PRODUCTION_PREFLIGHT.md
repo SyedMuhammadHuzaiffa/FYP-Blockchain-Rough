@@ -94,20 +94,22 @@ The repository alone cannot verify steps 2 and 3 because the backend values are 
 
 | Check | PASS / FAIL / BLOCKED | Evidence or command result | Owner | Notes |
 | --- | --- | --- | --- | --- |
-| Firebase project and CLI account |  |  |  |  |
-| Functions deployed in `us-central1` |  |  |  |  |
-| Secret names present only |  |  |  |  |
-| Amoy RPC returns chain ID `80002` |  |  |  |  |
-| Frontend and backend contract match |  |  |  |  |
-| Issuer authorized |  |  |  |  |
-| Issuer wallet has Amoy POL |  |  |  |  |
-| `FRONTEND_BASE_URL` fallback is production URL |  |  |  |  |
-| Vercel route refreshes pass |  |  |  |  |
-| SendGrid invite reaches controlled inbox |  |  |  |  |
-| Certificate email reaches controlled student inbox |  |  |  |  |
-| Pinata upload and public gateway pass |  |  |  |  |
-| Historical `certificate-frontend/src/.env` review recorded |  | Empty and removed from tracking; local file preserved and ignored. |  |  |
-| Legacy contract/link sources assessed |  |  |  |  |
+| Firebase project and CLI account | BLOCKED | Local alias is `blockchain-certificates-7bea4`; Firebase CLI credentials require reauthentication before remote project access. | Deployment owner | Reauthenticate without recording a token. |
+| Functions deployed in `us-central1` | BLOCKED | `firebase functions:list` could not authenticate, so deployed callable Functions and region were not enumerated. | Deployment owner | Re-run after Firebase reauthentication. |
+| Secret names present only | BLOCKED | `gcloud` is unavailable and Firebase CLI cannot authenticate; no secret payloads were requested. | Deployment owner | Verify names only in Secret Manager. |
+| Amoy RPC returns chain ID `80002` | PASS | Read-only ethers RPC call to `polygon-amoy.drpc.org` returned chain ID `80002`. | Public RPC |  |
+| Public verifier contract bytecode and owner | PASS | Bytecode is present at frontend fallback contract; public `owner()` read succeeded. | Public RPC | Owner is public chain metadata; it is not assumed to be the Functions issuer. |
+| Frontend and backend contract match | BLOCKED | Frontend fallback/public variable is known, but backend `CERTIFICATE_REGISTRY_ADDRESS` was not retrieved. | Deployment owner | Compare through authorized deployment configuration only. |
+| Backend chain configuration matches Amoy | BLOCKED | Frontend/public RPC is Amoy, but backend `BLOCKCHAIN_CHAIN_ID` was not retrieved. | Deployment owner | Confirm value is `80002` without disclosing it. |
+| Issuer authorized | BLOCKED | Functions issuer address is not present in tracked metadata; historical issuer-event query was unavailable from the public RPC. | Deployment owner | Supply the public issuer address, then run read-only `authorizedIssuers(address)`. |
+| Issuer wallet has Amoy POL | BLOCKED | Requires the public Functions issuer address. | Deployment owner | Check public balance after issuer address is supplied. |
+| `FRONTEND_BASE_URL` fallback is production URL | BLOCKED | No unique deployed frontend URL is tracked; backend environment value was not retrieved. | Deployment owner | Provide production URL and verify fallback configuration securely. |
+| Vercel route refreshes pass | BLOCKED | No unique deployed frontend URL was found in tracked configuration or public search. | Deployment owner | Provide the deployed URL for unauthenticated route checks. |
+| SendGrid invite reaches controlled inbox | BLOCKED | Delivery requires deployed Function confirmation and a live controlled-inbox test. | Deployment owner | Do not test with `.example` recipients. |
+| Certificate email reaches controlled student inbox | BLOCKED | Delivery requires a live issuance to the controlled Student inbox. | Deployment owner | Perform after the contract and issuer checks pass. |
+| Pinata upload and public gateway pass | BLOCKED | Upload requires a live issuance; deployed Function/secret-name enumeration is currently blocked. | Deployment owner | Verify after Firebase access is restored. |
+| Historical `certificate-frontend/src/.env` review recorded | PASS | Empty and removed from tracking; local file preserved and ignored. | Repository |  |
+| Legacy contract/link sources assessed | PASS | Legacy files are documented and remain untouched pending production QA. | Repository | See `LEGACY_CODE_REVIEW.md`. |
 
 ## Current Blocks Before Production Testing
 
@@ -115,3 +117,5 @@ The repository alone cannot verify steps 2 and 3 because the backend values are 
 - Verify the public Functions issuer wallet is authorized and funded on Polygon Amoy.
 - Keep `certificate-frontend/src/.env` untracked; it is unused by Vite. Use `certificate-frontend/.env` only for optional public Vite variables when needed.
 - Use controlled real inboxes for Organization Admin, Teacher, and Student flows; replace the first-row CSV `studentEmail` before uploading.
+
+For secret-name verification without values, use Google Cloud Console: select project `blockchain-certificates-7bea4` -> Security -> Secret Manager. Confirm only the presence of `BLOCKCHAIN_RPC_URL`, `BLOCKCHAIN_PRIVATE_KEY`, `CERTIFICATE_REGISTRY_ADDRESS`, `BLOCKCHAIN_CHAIN_ID`, `PINATA_JWT`, `SENDGRID_API_KEY`, and `FRONTEND_BASE_URL`.
