@@ -8,7 +8,7 @@ Use a clean demo workspace where possible. If using seeded data, remember that `
 
 - [ ] Confirm Firebase project is the intended demo project: `blockchain-certificates-7bea4`.
 - [ ] Confirm frontend points to Firebase Functions region `us-central1`.
-- [ ] Confirm public blockchain read helper points to Polygon Amoy and the active `CertificateRegistry` address.
+- [ ] Confirm public blockchain read helper targets Polygon Amoy (chain ID `80002`) and the active `CertificateRegistry` address. It accepts optional public `VITE_CERTIFICATE_REGISTRY_ADDRESS` and otherwise uses the validated Amoy fallback.
 - [ ] Confirm the issuer wallet used by Firebase Functions is authorized on the deployed contract.
 - [ ] Confirm the issuer wallet has enough Amoy POL/test MATIC for at least one single issue, one bulk issue, and one revocation.
 - [ ] Create or verify a Super Admin Firestore profile with `role: "superadmin"`.
@@ -124,6 +124,7 @@ Use a small CSV first, then a larger CSV if needed. Keep the demo below 10 rows 
 
 - [ ] Open `/dashboard/bulk-issue`.
 - [ ] Download or prepare a CSV with headers matching the UI expectations.
+- [ ] If using `demo-data/demo-bulk-certificates.csv`, replace the first data row's `studentEmail` with the controlled Student inbox before upload.
 - [ ] Include 3-5 rows with realistic student names, student emails, course names, and dates.
 - [ ] Upload/paste the CSV.
   - Expected: rows parse cleanly; invalid rows are called out before submission.
@@ -307,7 +308,7 @@ Capture clean, high-resolution screenshots with demo-safe data. Prefer productio
 
 ## LinkedIn Carousel Asset Checklist
 
-Current untracked carousel assets live in `linkedin-carousel/` plus `linkedin-carousel-slide-1.html`. Treat these as portfolio assets and commit them separately if they are kept.
+Carousel assets live in `linkedin-carousel/` plus `linkedin-carousel-slide-1.html`. Treat these as portfolio assets and keep them in version control with their referenced screenshots.
 
 - [ ] Open `linkedin-carousel/index.html`.
   - Expected: preview page shows all eight slide iframes.
